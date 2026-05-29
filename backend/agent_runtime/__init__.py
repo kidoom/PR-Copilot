@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .agent_def import AgentDefinition, AgentRegistry, UnknownAgentError
+from .config import ModelConfig
 from .loop import run_loop
 from .model_client import ModelClient
 from .models import (
@@ -11,6 +12,7 @@ from .models import (
     ToolResultBlock,
     ToolUseBlock,
 )
+from .openai_client import OpenAIModelClient, build_tools_param
 from .registry import ToolRegistry, filter_tools, TASK_TOOL_NAME
 from .results import AgentResult, ToolExecutionResult
 from .sub_agent import SubAgentResult
@@ -34,8 +36,10 @@ __all__ = [
     "FinalStep",
     "Message",
     "ModelClient",
+    "ModelConfig",
     "ModelResponse",
     "ObserveStep",
+    "OpenAIModelClient",
     "RiskLevel",
     "Role",
     "StepKind",
@@ -52,6 +56,7 @@ __all__ = [
     "ToolSchema",
     "ToolUseBlock",
     "UnknownAgentError",
+    "build_tools_param",
     "filter_tools",
     "project_schema",
     "run_loop",
