@@ -82,11 +82,27 @@ SQL_CONSTRUCTION_PATTERNS = [
 
 LARGE_CHANGE_LINES = 500
 
-_SECRET_REDACT_PATTERN = re.compile(r"""(?i)(secret|token|password|api[_-]?key|private[_-]?key)\s*[:=]\s*(['"]?)[^\s'"]{8,}(['"]?)""")
+# Token value patterns: detect actual secret values regardless of variable name
+_TOKEN_VALUE_PATTERNS = [
+    re.compile(r"""Bearer\s+[A-Za-z0-9_\-\.=]{20,}"""),
+    re.compile(r"""ghp_[A-Za-z0-9]{36,}"""),
+    re.compile(r"""github_pat_[A-Za-z0-9_]{22,}"""),
+    re.compile(r"""gho_[A-Za-z0-9]{36,}"""),
+    re.compile(r"""ghu_[A-Za-z0-9]{36,}"""),
+    re.compile(r"""ghs_[A-Za-z0-9]{36,}"""),
+    re.compile(r"""grs_[A-Za-z0-9]{36,}"""),
+    re.compile(r"""sk-[A-Za-z0-9_\-]{20,}"""),
+    re.compile(r"""xox[bpsa]-[A-Za-z0-9\-]{10,}"""),
+    re.compile(r"""AKIA[A-Z0-9]{16}"""),
+    re.compile(r"""(?i)(?:secret|token|password|api[_-]?key|private[_-]?key)\s*[:=]\s*['"][^'"]{8,}['"]"""),
+    re.compile(r"""(?i)(?:secret|token|password|api[_-]?key|private[_-]?key)\s*[:=]\s*[A-Za-z0-9+/=_-]{16,}"""),
+]
 
 
-def _redact_excerpt(text: str) -> str:
-    return _SECRET_REDACT_PATTERN.sub(r'\1=<REDACTED>', text)
+def sanitize_excerpt(text: str) -> str:
+    for pattern in _TOKEN_VALUE_PATTERNS:
+        text = pattern.sub("<REDACTED>", text)
+    return text
 
 
 def _make_item(
@@ -102,7 +118,8 @@ def _make_item(
     hunk_index: int | None = None,
     excerpt: str | None = None,
 ) -> EvidenceItem:
-    eid = make_evidence_id(source, rule_id, file, line, excerpt, message)
+    sanitized = sanitize_excerpt(excerpt) if excerpt else excerpt
+    eid = make_evidence_id(source, rule_id, file, line, sanitized, message)
     return EvidenceItem(
         id=eid,
         source=source,
@@ -115,7 +132,7 @@ def _make_item(
         tags=tags,
         line=line,
         hunk_index=hunk_index,
-        excerpt=excerpt,
+        excerpt=sanitized,
     )
 
 
@@ -133,7 +150,7 @@ def _scan_sensitive_field(file: str, line_no: int, hunk_idx: int, content: str) 
                 tags=[tag],
                 line=line_no,
                 hunk_index=hunk_idx,
-                excerpt=_redact_excerpt(content.strip()[:120]),
+                excerpt=content.strip()[:120],
             )
     return None
 
@@ -211,6 +228,21 @@ def _scan_added_lines(file_entry: FileEntry) -> list[EvidenceItem]:
     return items
 
 
+_HINT_CATEGORY_MAP = {
+    "auth_path": "security",
+    "payment_path": "security",
+    "config_path": "config",
+    "db_path": "maintainability",
+}
+
+
+def _infer_category_from_hints(hints: list[str]) -> str:
+    for hint in hints:
+        if hint in _HINT_CATEGORY_MAP:
+            return _HINT_CATEGORY_MAP[hint]
+    return "security"
+
+
 def _file_level_evidence(file_entry: FileEntry) -> list[EvidenceItem]:
     items: list[EvidenceItem] = []
 
@@ -220,7 +252,7 @@ def _file_level_evidence(file_entry: FileEntry) -> list[EvidenceItem]:
             rule_id="high_risk_path",
             file=file_entry.filename,
             severity="warning",
-            category="security",
+            category=_infer_category_from_hints(file_entry.risk_hints),
             message=f"File in high-risk path: {file_entry.filename}",
             confidence=0.7,
             tags=file_entry.risk_hints[:5],

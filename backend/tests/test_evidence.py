@@ -351,3 +351,90 @@ def test_evidence_excludes_tokens_and_patches(client):
     assert "hunks" not in resp.json()
 
     del _contexts[ctx.context_id]
+
+
+# --- P2: Token value pattern detection ---
+
+
+def test_bearer_token_redacted():
+    from backend.review_pipeline.evidence import sanitize_excerpt
+    result = sanitize_excerpt("Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U")
+    assert "eyJ" not in result
+    assert "REDACTED" in result
+
+
+def test_github_pat_redacted():
+    from backend.review_pipeline.evidence import sanitize_excerpt
+    result = sanitize_excerpt("using github_pat_11ABCDEF_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234")
+    assert "github_pat_11ABCDEF" not in result
+    assert "REDACTED" in result
+
+
+def test_aws_key_redacted():
+    from backend.review_pipeline.evidence import sanitize_excerpt
+    result = sanitize_excerpt("aws_key = AKIAIOSFODNN7EXAMPLE")
+    assert "AKIAIOSFODNN7EXAMPLE" not in result
+    assert "REDACTED" in result
+
+
+def test_slack_token_redacted():
+    from backend.review_pipeline.evidence import sanitize_excerpt
+    result = sanitize_excerpt("token = xoxb-1234-5678-abcdef")
+    assert "xoxb-1234-5678-abcdef" not in result
+    assert "REDACTED" in result
+
+
+def test_all_rules_sanitize_excerpt(client):
+    """All evidence items with excerpts should have secrets redacted."""
+    hunk = Hunk(
+        header="@@ -1,0 +1,1 @@",
+        old_start=1, old_lines=0, new_start=1, new_lines=1,
+        lines=[HunkLine(type="added", content='eval(request.headers["Authorization"] + " ghp_abcdefghijklmnopqrstuvwxyz1234567890abcd")', old_line=None, new_line=1)],
+    )
+    f = _make_file(hunks=[hunk])
+    ctx = _make_context(files=[f])
+    _contexts[ctx.context_id] = ctx
+
+    resp = client.post("/api/review/evidence", json={"context_id": ctx.context_id})
+    assert resp.status_code == 200
+    body = resp.text
+    assert "ghp_abcdefghijklmnopqrstuvwxyz" not in body
+    assert "REDACTED" in body
+
+    del _contexts[ctx.context_id]
+
+
+# --- P3: High-risk path category mapping ---
+
+
+def test_high_risk_path_auth_is_security():
+    f = _make_file(filename="src/auth/login.py", is_high_risk_path=True, risk_hints=["auth_path"])
+    ctx = _make_context(files=[f])
+    items = analyze(ctx)
+    hr = [i for i in items if i.rule_id == "high_risk_path"]
+    assert len(hr) == 1
+    assert hr[0].category == "security"
+
+
+def test_high_risk_path_payment_is_security():
+    f = _make_file(filename="src/billing/stripe.py", is_high_risk_path=True, risk_hints=["payment_path"])
+    ctx = _make_context(files=[f])
+    items = analyze(ctx)
+    hr = [i for i in items if i.rule_id == "high_risk_path"]
+    assert hr[0].category == "security"
+
+
+def test_high_risk_path_config_is_config():
+    f = _make_file(filename="config/settings.py", is_high_risk_path=True, risk_hints=["config_path"])
+    ctx = _make_context(files=[f])
+    items = analyze(ctx)
+    hr = [i for i in items if i.rule_id == "high_risk_path"]
+    assert hr[0].category == "config"
+
+
+def test_high_risk_path_db_is_maintainability():
+    f = _make_file(filename="db/migration/001.py", is_high_risk_path=True, risk_hints=["db_path"])
+    ctx = _make_context(files=[f])
+    items = analyze(ctx)
+    hr = [i for i in items if i.rule_id == "high_risk_path"]
+    assert hr[0].category == "maintainability"
