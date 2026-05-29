@@ -1,4 +1,4 @@
-from backend.agent_runtime.trace import (
+from backend.agent_runtime.runtime.trace import (
     CallStep,
     FinalStep,
     ObserveStep,

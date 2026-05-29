@@ -4,3 +4,23 @@ dist/
 .env.local
 *.log
 .DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+
+# IDE / tooling
+.claude/
+.codex/
+.opencode/
+.vscode/
+
+# Frontend build
+frontend/.vite/
+
+# Tests and openspec
+backend/tests/
+openspec/
