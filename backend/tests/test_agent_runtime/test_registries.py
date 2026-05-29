@@ -252,3 +252,95 @@ def test_filter_tools_empty_allowed_gives_all_except_task():
     assert "task" not in names
     assert "search" in names
     assert "write_file" in names
+
+
+class FakeTaskToolAlt(Tool):
+    @property
+    def name(self) -> str:
+        return "task_tool"
+
+    @property
+    def description(self) -> str:
+        return "Alt task tool"
+
+    @property
+    def input_schema(self) -> dict[str, Any]:
+        return {}
+
+    @property
+    def risk_level(self) -> RiskLevel:
+        return RiskLevel.LOW
+
+    @property
+    def is_read_only(self) -> bool:
+        return True
+
+    @property
+    def is_concurrency_safe(self) -> bool:
+        return True
+
+    async def call(self, input: dict[str, Any]) -> str:
+        return "ok"
+
+
+class FakeSubAgentTool(Tool):
+    @property
+    def name(self) -> str:
+        return "sub_agent"
+
+    @property
+    def description(self) -> str:
+        return "Sub agent tool"
+
+    @property
+    def input_schema(self) -> dict[str, Any]:
+        return {}
+
+    @property
+    def risk_level(self) -> RiskLevel:
+        return RiskLevel.LOW
+
+    @property
+    def is_read_only(self) -> bool:
+        return True
+
+    @property
+    def is_concurrency_safe(self) -> bool:
+        return True
+
+    async def call(self, input: dict[str, Any]) -> str:
+        return "ok"
+
+
+def test_filter_tools_removes_task_tool_variant():
+    reg = ToolRegistry()
+    reg.register(FakeSearchTool())
+    reg.register(FakeTaskToolAlt())
+    agent = AgentDefinition(name="a", description="d", system_prompt="p")
+    filtered = filter_tools(reg, agent)
+    names = {t.name for t in filtered}
+    assert "task_tool" not in names
+    assert "search" in names
+
+
+def test_filter_tools_removes_sub_agent():
+    reg = ToolRegistry()
+    reg.register(FakeSearchTool())
+    reg.register(FakeSubAgentTool())
+    agent = AgentDefinition(name="a", description="d", system_prompt="p")
+    filtered = filter_tools(reg, agent)
+    names = {t.name for t in filtered}
+    assert "sub_agent" not in names
+    assert "search" in names
+
+
+def test_filter_tools_removes_all_recursive_variants():
+    reg = ToolRegistry()
+    reg.register(FakeSearchTool())
+    reg.register(FakeTaskTool())
+    reg.register(FakeTaskToolAlt())
+    reg.register(FakeSubAgentTool())
+    agent = AgentDefinition(name="a", description="d", system_prompt="p")
+    filtered = filter_tools(reg, agent)
+    names = {t.name for t in filtered}
+    assert names == {"search"}

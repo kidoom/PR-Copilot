@@ -37,7 +37,10 @@ async def run_loop(
 
         steps.append(ThinkStep(reasoning=response.content))
 
-        messages.append(Message(role=Role.ASSISTANT, content=response.content))
+        assistant_content: str | list[ToolUseBlock] = response.content
+        if response.tool_use_blocks:
+            assistant_content = list(response.tool_use_blocks)
+        messages.append(Message(role=Role.ASSISTANT, content=assistant_content))
 
         for block in response.tool_use_blocks:
             steps.append(CallStep(

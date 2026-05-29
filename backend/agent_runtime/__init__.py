@@ -23,7 +23,7 @@ from backend.agent_runtime.model.messages import (
 )
 from backend.agent_runtime.model.openai_client import OpenAIModelClient, build_tools_param
 from backend.agent_runtime.tool.protocol import RiskLevel, Tool, ToolSchema, project_schema
-from backend.agent_runtime.tool.registry import ToolRegistry, filter_tools, TASK_TOOL_NAME
+from backend.agent_runtime.tool.registry import ToolRegistry, filter_tools, TASK_TOOL_NAME, DENIED_CHILD_TOOL_NAMES
 
 __all__ = [
     "AgentDefinition",
@@ -31,6 +31,7 @@ __all__ = [
     "AgentResult",
     "AgentStep",
     "CallStep",
+    "DENIED_CHILD_TOOL_NAMES",
     "FinalStep",
     "Message",
     "ModelClient",

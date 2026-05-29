@@ -12,7 +12,7 @@ from backend.agent_runtime.runtime.task_tool import TaskTool, TaskToolError, DEF
 
 async def fake_runner(agent_def: AgentDefinition, prompt: str, max_steps: int) -> SubAgentResult:
     return SubAgentResult(
-        output=f"ran {agent_def.name} with {prompt[:20]} (steps={max_steps})",
+        output=f"ran {agent_def.name} with {prompt} (steps={max_steps})",
         agent_type=agent_def.name,
         stopped_by_max_steps=False,
     )
@@ -131,3 +131,60 @@ async def test_max_steps_clamped_to_absolute():
     tool = TaskTool(agent_registry=reg, runner=fake_runner)
     result = await tool.run(prompt="test", agent_type="reviewer", max_steps=999)
     assert f"steps={ABSOLUTE_MAX_STEPS}" in result.output
+
+
+@pytest.mark.asyncio
+async def test_task_with_intent_field():
+    reg = _make_registry()
+    tool = TaskTool(agent_registry=reg, runner=fake_runner)
+    result = await tool.run(
+        task={"task_type": "security_context", "intent": "Check for SQL injection risks"},
+        agent_type="reviewer",
+    )
+    assert "Check for SQL injection" in result.output
+
+
+@pytest.mark.asyncio
+async def test_task_with_queries_field():
+    reg = _make_registry()
+    tool = TaskTool(agent_registry=reg, runner=fake_runner)
+    result = await tool.run(
+        task={"task_type": "security_context", "queries": ["scan for secrets", "check auth patterns"]},
+        agent_type="reviewer",
+    )
+    assert "scan for secrets" in result.output
+    assert "check auth patterns" in result.output
+
+
+@pytest.mark.asyncio
+async def test_task_with_task_type_and_target_files():
+    reg = _make_registry()
+    tool = TaskTool(agent_registry=reg, runner=fake_runner)
+    result = await tool.run(
+        task={"task_type": "test_context", "target_files": ["src/auth.py", "src/login.py"]},
+        agent_type="reviewer",
+    )
+    assert "test_context" in result.output
+    assert "src/auth.py" in result.output
+
+
+@pytest.mark.asyncio
+async def test_task_with_task_type_only():
+    reg = _make_registry()
+    tool = TaskTool(agent_registry=reg, runner=fake_runner)
+    result = await tool.run(
+        task={"task_type": "config_context"},
+        agent_type="reviewer",
+    )
+    assert "config_context" in result.output
+
+
+@pytest.mark.asyncio
+async def test_intent_takes_priority_over_queries():
+    reg = _make_registry()
+    tool = TaskTool(agent_registry=reg, runner=fake_runner)
+    result = await tool.run(
+        task={"intent": "Analyze security", "queries": ["q1", "q2"]},
+        agent_type="reviewer",
+    )
+    assert "Analyze security" in result.output

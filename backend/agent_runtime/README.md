@@ -6,17 +6,26 @@ A minimal kgent-like agent runtime for controlled tool use, routable SubAgents, 
 
 ```
 backend/agent_runtime/
-    __init__.py          # Public API
-    models.py            # Runtime message models (Message, ToolUseBlock, ToolResultBlock, ModelResponse)
-    trace.py             # Agent step trace (ThinkStep, CallStep, ObserveStep, FinalStep)
-    results.py           # AgentResult, ToolExecutionResult
-    tool.py              # Tool protocol (ABC with risk_level, is_read_only, is_concurrency_safe)
-    registry.py          # ToolRegistry, filter_tools
-    agent_def.py         # AgentDefinition, AgentRegistry
-    model_client.py      # ModelClient protocol
-    loop.py              # run_loop (ReAct think-call-observe loop)
-    task_tool.py         # TaskTool for SubAgent delegation
-    sub_agent.py         # SubAgentResult
+    __init__.py              # Re-exports all public API (backward compatible)
+    README.md
+    model/                   # Model I/O layer
+        __init__.py
+        messages.py          # Message, Role, ToolUseBlock, ToolResultBlock, ModelResponse, TokenUsage
+        client.py            # ModelClient ABC (chat protocol)
+        config.py            # ModelConfig (env-based configuration)
+        openai_client.py     # OpenAIModelClient (OpenAI-compatible API client)
+    tool/                    # Tool abstraction layer
+        __init__.py
+        protocol.py          # Tool ABC, RiskLevel, ToolSchema, project_schema
+        registry.py          # ToolRegistry, filter_tools, DENIED_CHILD_TOOL_NAMES
+    runtime/                 # Runtime orchestration layer
+        __init__.py
+        trace.py             # StepKind, ThinkStep, CallStep, ObserveStep, FinalStep, AgentStep
+        results.py           # AgentResult, ToolExecutionResult
+        agent_def.py         # AgentDefinition, AgentRegistry, UnknownAgentError
+        loop.py              # run_loop (ReAct think-call-observe loop)
+        sub_agent.py         # SubAgentResult
+        task_tool.py         # TaskTool for SubAgent delegation
 ```
 
 ## Core Concepts
@@ -115,21 +124,23 @@ result = await task_tool.run(
 
 ## Mapping Context Task Planner to TaskTool
 
-The Context Task Planner produces a list of `ContextTask` items. Each task maps to a `TaskTool.run()` call:
+The Context Task Planner produces `ContextTask` items. `TaskTool.run()` accepts these fields:
 
-| ContextTask field | TaskTool parameter |
+| ContextTask field | TaskTool behavior |
 |---|---|
-| `task.description` or `task.prompt` | `prompt` |
-| `task.category` (mapped to agent type) | `agent_type` |
-| Step budget from planner config | `max_steps` |
+| `task.intent` | Used directly as prompt |
+| `task.queries` | Joined into multi-line prompt |
+| `task.task_type` + `task.target_files` | Generates prompt: "Perform {task_type} on {files}" |
+| `task.task_type` (no target) | Generates prompt: "Perform {task_type}" |
+| `task.budget` | Maps to `max_steps` |
 
 Example planner integration:
 
 ```python
 for task in planner_output.tasks:
-    agent_type = CATEGORY_TO_AGENT_MAP[task.category]
+    agent_type = TASK_TYPE_TO_AGENT_MAP[task.task_type]
     result = await task_tool.run(
-        prompt=task.description,
+        task=task.to_dict(),
         agent_type=agent_type,
     )
 ```
@@ -159,7 +170,7 @@ Rules:
 - Each child receives only its delegated prompt and configured system context, not the full parent transcript
 - Child agents cannot communicate with siblings directly
 - Child results are returned as bounded `SubAgentResult` payloads to the parent
-- The `task` tool is universally denied for child agents, preventing recursive spawning
+- `task`, `task_tool`, and `sub_agent` tools are universally denied for child agents, preventing recursive spawning
 
 ## Framework Independence
 

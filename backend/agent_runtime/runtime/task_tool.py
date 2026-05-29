@@ -34,7 +34,12 @@ class TaskTool:
     ) -> SubAgentResult:
         effective_prompt = prompt
         if effective_prompt is None and task is not None:
-            effective_prompt = task.get("prompt") or task.get("description")
+            effective_prompt = (
+                task.get("prompt")
+                or task.get("description")
+                or task.get("intent")
+                or _build_prompt_from_queries(task)
+            )
         if not effective_prompt or not effective_prompt.strip():
             raise TaskToolError("TaskTool requires a non-empty prompt or task payload.")
 
@@ -44,3 +49,16 @@ class TaskTool:
         steps = max(1, min(steps, ABSOLUTE_MAX_STEPS))
 
         return await self._runner(agent_def, effective_prompt, steps)
+
+
+def _build_prompt_from_queries(task: dict[str, Any]) -> str | None:
+    queries = task.get("queries")
+    if queries and isinstance(queries, list) and queries:
+        return "\n".join(queries)
+    task_type = task.get("task_type")
+    if task_type:
+        target = task.get("target_files") or task.get("target")
+        if target:
+            return f"Perform {task_type} on {', '.join(target) if isinstance(target, list) else target}"
+        return f"Perform {task_type}"
+    return None

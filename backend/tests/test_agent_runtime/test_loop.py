@@ -170,3 +170,37 @@ async def test_token_usage_accumulated():
     result = await run_loop(model=model, tool_registry=reg, messages=[Message(role=Role.USER, content="usage")])
     assert result.token_usage.input_tokens == 30
     assert result.token_usage.output_tokens == 13
+
+
+class CapturingModelClient(ModelClient):
+    def __init__(self, responses: list[ModelResponse]) -> None:
+        self._responses = list(responses)
+        self._call_count = 0
+        self.captured_messages: list[list[Message]] = []
+
+    async def chat(self, messages: list[Message]) -> ModelResponse:
+        self.captured_messages.append(list(messages))
+        resp = self._responses[self._call_count]
+        self._call_count += 1
+        return resp
+
+
+@pytest.mark.asyncio
+async def test_assistant_message_includes_tool_use_blocks():
+    model = CapturingModelClient([
+        ModelResponse(
+            content="thinking",
+            tool_use_blocks=[ToolUseBlock(tool_use_id="u1", name="echo", input={"text": "hi"})],
+        ),
+        ModelResponse(content="done", tool_use_blocks=[]),
+    ])
+    reg = ToolRegistry()
+    reg.register(EchoTool())
+    await run_loop(model=model, tool_registry=reg, messages=[Message(role=Role.USER, content="test")])
+
+    second_call = model.captured_messages[1]
+    assistant_msgs = [m for m in second_call if m.role == Role.ASSISTANT]
+    assert len(assistant_msgs) >= 1
+    last_assistant = assistant_msgs[-1]
+    assert isinstance(last_assistant.content, list)
+    assert any(isinstance(b, ToolUseBlock) and b.tool_use_id == "u1" for b in last_assistant.content)
