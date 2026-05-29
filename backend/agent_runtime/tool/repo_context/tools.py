@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from backend.repo_context.models import (
+from backend.agent_runtime.tool.repo_context.models import (
     ContextEvidencePackage,
     ContextEvidenceRef,
     ContextFinding,
@@ -12,7 +12,7 @@ from backend.repo_context.models import (
     RepoVerificationState,
     VerificationStatus,
 )
-from backend.repo_context.policy import (
+from backend.agent_runtime.tool.repo_context.policy import (
     check_budget_file_read,
     check_budget_search,
     check_budget_tokens,

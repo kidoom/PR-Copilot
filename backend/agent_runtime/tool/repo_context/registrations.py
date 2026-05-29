@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import Any
 
 from backend.agent_runtime.tool.protocol import Tool, RiskLevel
-from backend.repo_context.models import RepoContextSession
-from backend.repo_context import tools as rc_tools
+from backend.agent_runtime.tool.repo_context.models import RepoContextSession
+from backend.agent_runtime.tool.repo_context import tools as rc_tools
 
 
 class VerifyRepoContextTool(Tool):

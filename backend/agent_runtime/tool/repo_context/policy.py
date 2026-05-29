@@ -4,7 +4,7 @@ import os
 import re
 from pathlib import Path
 
-from backend.repo_context.models import (
+from backend.agent_runtime.tool.repo_context.models import (
     IGNORED_DIRECTORIES,
     SENSITIVE_FILE_PATTERNS,
     RepoContextSession,
