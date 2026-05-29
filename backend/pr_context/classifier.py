@@ -59,9 +59,10 @@ def identify_language(filename: str) -> tuple[str, str, str]:
     name = path.name.lower()
 
     # Special filenames
-    if name in ("dockerfile", "makefile", "procfile"):
-        key = name if name != "makefile" else ".cfg"
-        return _EXT_TO_LANGUAGE.get(key, ("unknown", "unknown", "unknown"))
+    if name == "dockerfile":
+        return ("dockerfile", "config", "config")
+    if name in ("makefile", "procfile"):
+        return _EXT_TO_LANGUAGE.get(".cfg", ("unknown", "unknown", "unknown"))
 
     return _EXT_TO_LANGUAGE.get(ext, ("unknown", "unknown", "unknown"))
 

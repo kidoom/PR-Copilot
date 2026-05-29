@@ -58,6 +58,9 @@ class PRContext:
     source: str
     fetched_at: str
     cache_key: str
+    owner: str
+    repo: str
+    pull_number: int
     pr: PRMetadata
     commits: CommitsData
     files: list[FileEntry] = field(default_factory=list)
@@ -106,6 +109,7 @@ def _build_file_entries(files: list[ChangedFile]) -> list[FileEntry]:
         # Scoring
         score = compute_priority_score(
             classification, file.additions, file.deletions, file.status,
+            filename=file.filename,
         )
 
         # Compute per-file stats
@@ -174,6 +178,9 @@ async def build_pr_context(
     pr_metadata_raw: dict,
     commits_raw: list[dict],
     files_raw: list[dict],
+    owner: str = "",
+    repo: str = "",
+    pull_number: int = 0,
 ) -> PRContext:
     """Build a complete PRContext from raw GitHub API data."""
     pr = fetch_pr_metadata(pr_metadata_raw)
@@ -185,13 +192,16 @@ async def build_pr_context(
 
     context_id = f"ctx_{uuid.uuid4().hex[:12]}"
     now = datetime.now(timezone.utc).isoformat()
-    cache_key = f"{pr.author}/{pr.base_branch}/{commits.head_sha}"
+    cache_key = f"{owner}/{repo}/{pull_number}/{commits.head_sha}"
 
     ctx = PRContext(
         context_id=context_id,
         source="github",
         fetched_at=now,
         cache_key=cache_key,
+        owner=owner,
+        repo=repo,
+        pull_number=pull_number,
         pr=pr,
         commits=commits,
         files=file_entries,
@@ -268,7 +278,12 @@ def get_patch_index_view(ctx: PRContext) -> dict:
     }
 
 
-def get_file_patch(ctx: PRContext, filename: str, hunk_index: int | None = None) -> dict:
+def get_file_patch(
+    ctx: PRContext,
+    filename: str,
+    hunk_index: int | None = None,
+    max_lines: int = 500,
+) -> dict:
     """Return patch data for a specific file, optionally filtered by hunk index."""
     entry = None
     for f in ctx.files:
@@ -284,12 +299,30 @@ def get_file_patch(ctx: PRContext, filename: str, hunk_index: int | None = None)
             raise IndexError(f"Hunk index {hunk_index} out of range (0-{len(hunks)-1})")
         hunks = [hunks[hunk_index]]
 
-    return {
+    # Cap total lines to avoid returning huge diffs
+    truncated = False
+    total_lines = 0
+    capped_hunks = []
+    for h in hunks:
+        if total_lines >= max_lines:
+            truncated = True
+            break
+        remaining = max_lines - total_lines
+        if len(h.lines) > remaining:
+            capped_hunks.append((h, h.lines[:remaining]))
+            truncated = True
+            total_lines += remaining
+        else:
+            capped_hunks.append((h, h.lines))
+            total_lines += len(h.lines)
+
+    result: dict = {
         "context_id": ctx.context_id,
         "filename": entry.filename,
         "patch_available": entry.patch_available,
         "is_binary": entry.is_binary,
         "parse_error": entry.parse_error,
+        "truncated": truncated,
         "hunks": [
             {
                 "header": h.header,
@@ -304,9 +337,10 @@ def get_file_patch(ctx: PRContext, filename: str, hunk_index: int | None = None)
                         "old_line": l.old_line,
                         "new_line": l.new_line,
                     }
-                    for l in h.lines
+                    for l in lines
                 ],
             }
-            for h in hunks
+            for h, lines in capped_hunks
         ],
     }
+    return result

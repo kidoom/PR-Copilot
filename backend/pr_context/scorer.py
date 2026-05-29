@@ -31,6 +31,28 @@ def compute_path_risk_score(filename: str) -> int:
     for keywords, score in _PATH_RISK_MAP.items():
         if parts & keywords:
             return score
+
+    # Low score for docs and test paths
+    name = filename.rsplit("/", 1)[-1].lower()
+    ext = name.rsplit(".", 1)[-1] if "." in name else ""
+    if ext in ("md", "mdx", "rst", "txt") or "docs" in parts or "doc" in parts:
+        return 10
+    if (
+        name.startswith("test_")
+        or name.endswith("_test.py")
+        or name.endswith(".test.js")
+        or name.endswith(".test.ts")
+        or name.endswith(".test.jsx")
+        or name.endswith(".test.tsx")
+        or name.endswith(".spec.js")
+        or name.endswith(".spec.ts")
+        or name.endswith(".spec.jsx")
+        or name.endswith(".spec.tsx")
+        or "tests" in parts
+        or "__tests__" in parts
+    ):
+        return 15
+
     return 40  # default for ordinary source paths
 
 
@@ -54,9 +76,10 @@ def compute_priority_score(
     additions: int,
     deletions: int,
     status: str,
+    filename: str = "",
 ) -> int:
     """Weighted priority score 0-100."""
-    path_risk = compute_path_risk_score(classification.language_family)
+    path_risk = compute_path_risk_score(filename) if filename else 40
     # Override path risk if high-risk path detected
     if classification.is_high_risk_path:
         path_risk = max(path_risk, 80)
