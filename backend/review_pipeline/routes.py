@@ -3,6 +3,8 @@ from pydantic import BaseModel
 
 from backend.pr_context.context_manager import get_context
 from backend.review_pipeline.intake import build_intake_summary
+from backend.review_pipeline.file_priority import build_file_priority_view
+from backend.review_pipeline.evidence import build_evidence_response
 
 router = APIRouter(prefix="/api/review", tags=["review-pipeline"])
 
@@ -17,3 +19,19 @@ async def intake_summary(req: IntakeRequest):
     if ctx is None:
         raise HTTPException(status_code=404, detail=f"Context not found: {req.context_id}")
     return build_intake_summary(ctx)
+
+
+@router.post("/file-priority")
+async def file_priority(req: IntakeRequest):
+    ctx = get_context(req.context_id)
+    if ctx is None:
+        raise HTTPException(status_code=404, detail=f"Context not found: {req.context_id}")
+    return build_file_priority_view(ctx.context_id, ctx.files)
+
+
+@router.post("/evidence")
+async def evidence(req: IntakeRequest):
+    ctx = get_context(req.context_id)
+    if ctx is None:
+        raise HTTPException(status_code=404, detail=f"Context not found: {req.context_id}")
+    return build_evidence_response(ctx)
