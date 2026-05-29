@@ -8,8 +8,9 @@ from backend.agent_runtime.tool.repo_context import tools as rc_tools
 
 
 class VerifyRepoContextTool(Tool):
-    def __init__(self, session: RepoContextSession) -> None:
+    def __init__(self, session: RepoContextSession, pr_context: Any = None) -> None:
         self._session = session
+        self._pr_context = pr_context
 
     @property
     def name(self) -> str: return "verify_repo_context"
@@ -27,7 +28,7 @@ class VerifyRepoContextTool(Tool):
 
     async def call(self, input: dict[str, Any]) -> str:
         import json
-        result = rc_tools.verify_repo_context(self._session, input["owner"], input["repo"], input.get("head_sha", ""), input.get("workspace_root", ""))
+        result = rc_tools.verify_repo_context(self._session, input["owner"], input["repo"], input.get("head_sha", ""), input.get("workspace_root", ""), self._pr_context)
         return json.dumps(result)
 
 
@@ -262,7 +263,7 @@ def create_context_tools(
 ) -> list[Tool]:
     return [
         TodoWriteTool(session),
-        VerifyRepoContextTool(session),
+        VerifyRepoContextTool(session, pr_context),
         ReadFilePatchTool(session, pr_context),
         SearchDiffTool(session, pr_context),
         SearchRepoTool(session),
