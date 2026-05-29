@@ -22,7 +22,7 @@ from backend.agent_runtime.model.messages import (
     ToolUseBlock,
 )
 from backend.agent_runtime.model.openai_client import OpenAIModelClient, build_tools_param
-from backend.agent_runtime.tool.protocol import RiskLevel, Tool, ToolSchema, project_schema
+from backend.agent_runtime.tool.protocol import RiskLevel, Tool, ToolConsentFn, ToolSchema, project_schema
 from backend.agent_runtime.tool.registry import ToolRegistry, filter_tools, TASK_TOOL_NAME, DENIED_CHILD_TOOL_NAMES
 
 __all__ = [
@@ -49,6 +49,7 @@ __all__ = [
     "ThinkStep",
     "TokenUsage",
     "Tool",
+    "ToolConsentFn",
     "ToolExecutionResult",
     "ToolRegistry",
     "ToolResultBlock",
