@@ -13,6 +13,8 @@ from .models import (
 )
 from .registry import ToolRegistry, filter_tools, TASK_TOOL_NAME
 from .results import AgentResult, ToolExecutionResult
+from .sub_agent import SubAgentResult
+from .task_tool import TaskTool, TaskToolError
 from .tool import RiskLevel, Tool, ToolSchema, project_schema
 from .trace import (
     AgentStep,
@@ -37,7 +39,10 @@ __all__ = [
     "RiskLevel",
     "Role",
     "StepKind",
+    "SubAgentResult",
     "TASK_TOOL_NAME",
+    "TaskTool",
+    "TaskToolError",
     "ThinkStep",
     "TokenUsage",
     "Tool",
