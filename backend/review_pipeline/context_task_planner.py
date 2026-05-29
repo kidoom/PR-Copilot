@@ -207,17 +207,19 @@ def task_identity(task: ContextTask) -> str:
 
 # --- 2. Route and Agent Metadata ---
 
-_READ_ONLY_TOOLS = [
-    "search_repo",
-    "read_repo_file",
-    "read_file_patch",
-    "search_diff",
-    "read_check_summary",
-    "read_review_comments_summary",
-]
-
-# SubAgents must not recursively spawn more tasks
 _SUBAGENT_DISALLOWED_TOOLS = ["task_tool", "sub_agent"]
+
+_BASE_TOOLS = ["todo_write", "verify_repo_context", "finish_context_package"]
+
+_PER_TASK_ALLOWED_TOOLS: dict[str, list[str]] = {
+    "test_context": _BASE_TOOLS + ["read_file_patch", "search_diff", "search_tests_for", "read_repo_file"],
+    "reference_context": _BASE_TOOLS + ["read_file_patch", "search_diff", "search_repo", "read_repo_file"],
+    "security_context": _BASE_TOOLS + ["read_file_patch", "search_diff", "search_repo", "read_repo_file", "read_repo_manifest"],
+    "config_context": _BASE_TOOLS + ["search_diff", "search_repo", "read_repo_file", "read_repo_manifest", "read_check_summary"],
+    "data_context": _BASE_TOOLS + ["read_file_patch", "search_diff", "search_repo", "read_repo_file"],
+    "runtime_context": _BASE_TOOLS + ["read_file_patch", "search_diff", "search_repo", "read_repo_file"],
+    "patch_deep_dive": _BASE_TOOLS + ["read_file_patch", "search_diff", "read_repo_file"],
+}
 
 
 # --- 2.1 Static Task Route registry ---
@@ -227,7 +229,7 @@ TASK_ROUTES: dict[str, TaskRoute] = {
         task_type=tt,
         route_key=ROUTE_KEYS[tt],
         agent_type=tt.replace("_", "-") + "-agent",
-        allowed_tools=list(_READ_ONLY_TOOLS),
+        allowed_tools=list(_PER_TASK_ALLOWED_TOOLS[tt]),
         output_schema=OUTPUT_SCHEMAS[tt],
         max_steps=5,
     )
@@ -241,43 +243,43 @@ AGENT_DEFINITIONS: dict[str, AgentDefinition] = {
     "test-context-agent": AgentDefinition(
         agent_type="test-context-agent",
         description="Finds related tests, test gaps, and test coverage signals for changed source files",
-        allowed_tools=list(_READ_ONLY_TOOLS),
+        allowed_tools=list(_PER_TASK_ALLOWED_TOOLS["test_context"]),
         disallowed_tools=list(_SUBAGENT_DISALLOWED_TOOLS),
     ),
     "reference-context-agent": AgentDefinition(
         agent_type="reference-context-agent",
         description="Finds references, callers, API usage, and symbol impact for changed files",
-        allowed_tools=list(_READ_ONLY_TOOLS),
+        allowed_tools=list(_PER_TASK_ALLOWED_TOOLS["reference_context"]),
         disallowed_tools=list(_SUBAGENT_DISALLOWED_TOOLS),
     ),
     "security-context-agent": AgentDefinition(
         agent_type="security-context-agent",
         description="Inspects authentication, authorization, secrets, SQL risk, and input validation context",
-        allowed_tools=list(_READ_ONLY_TOOLS),
+        allowed_tools=list(_PER_TASK_ALLOWED_TOOLS["security_context"]),
         disallowed_tools=list(_SUBAGENT_DISALLOWED_TOOLS),
     ),
     "config-context-agent": AgentDefinition(
         agent_type="config-context-agent",
         description="Inspects configuration, environment variables, dependency files, CI/checks, and deployment context",
-        allowed_tools=list(_READ_ONLY_TOOLS),
+        allowed_tools=list(_PER_TASK_ALLOWED_TOOLS["config_context"]),
         disallowed_tools=list(_SUBAGENT_DISALLOWED_TOOLS),
     ),
     "data-context-agent": AgentDefinition(
         agent_type="data-context-agent",
         description="Inspects database, schema, migration, cache, model, and data access context",
-        allowed_tools=list(_READ_ONLY_TOOLS),
+        allowed_tools=list(_PER_TASK_ALLOWED_TOOLS["data_context"]),
         disallowed_tools=list(_SUBAGENT_DISALLOWED_TOOLS),
     ),
     "runtime-context-agent": AgentDefinition(
         agent_type="runtime-context-agent",
         description="Inspects exception handling, async behavior, concurrency, timeouts, retries, and resource lifecycle",
-        allowed_tools=list(_READ_ONLY_TOOLS),
+        allowed_tools=list(_PER_TASK_ALLOWED_TOOLS["runtime_context"]),
         disallowed_tools=list(_SUBAGENT_DISALLOWED_TOOLS),
     ),
     "patch-deep-dive-agent": AgentDefinition(
         agent_type="patch-deep-dive-agent",
         description="Performs deep local inspection of high-priority or complex patches",
-        allowed_tools=list(_READ_ONLY_TOOLS),
+        allowed_tools=list(_PER_TASK_ALLOWED_TOOLS["patch_deep_dive"]),
         disallowed_tools=list(_SUBAGENT_DISALLOWED_TOOLS),
     ),
 }
