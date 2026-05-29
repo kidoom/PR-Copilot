@@ -33,12 +33,53 @@ def _estimate_tokens(text: str) -> int:
 # --- 3.1 verify_repo_context ---
 
 
+def _get_git_remote_origin(repo_root: str) -> str | None:
+    """Read the first remote origin URL from git config."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            cwd=repo_root, capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return None
+
+
+def _get_git_head_sha(repo_root: str) -> str | None:
+    """Read current HEAD commit SHA."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_root, capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return None
+
+
+def _parse_owner_repo_from_remote(remote_url: str) -> tuple[str, str] | None:
+    """Extract owner/repo from a git remote URL."""
+    import re
+    # SSH: git@github.com:owner/repo.git
+    m = re.search(r"[:/]([^/]+)/([^/]+?)(?:\.git)?$", remote_url)
+    if m:
+        return m.group(1), m.group(2)
+    return None
+
+
 def verify_repo_context(
     session: RepoContextSession,
     owner: str,
     repo: str,
     head_sha: str = "",
     workspace_root: str = "",
+    pr_context: Any = None,
 ) -> dict[str, Any]:
     if workspace_root:
         session.repo_root = workspace_root
@@ -59,11 +100,50 @@ def verify_repo_context(
         )
         return {"verified": False, "reason": "Not a git repository"}
 
+    trusted_owner = owner
+    trusted_repo = repo
+    trusted_sha = head_sha
+    if pr_context is not None:
+        trusted_owner = getattr(pr_context, "owner", owner)
+        trusted_repo = getattr(pr_context, "repo", repo)
+        commits = getattr(pr_context, "commits", None)
+        if commits is not None:
+            trusted_sha = getattr(commits, "head_sha", head_sha)
+
+    errors: list[str] = []
+
+    remote_url = _get_git_remote_origin(session.repo_root)
+    if remote_url:
+        parsed = _parse_owner_repo_from_remote(remote_url)
+        if parsed:
+            remote_owner, remote_repo = parsed
+            if remote_owner != trusted_owner or remote_repo != trusted_repo:
+                errors.append(
+                    f"Remote origin {remote_owner}/{remote_repo} does not match "
+                    f"expected {trusted_owner}/{trusted_repo}"
+                )
+
+    if trusted_sha:
+        actual_sha = _get_git_head_sha(session.repo_root)
+        if actual_sha and not actual_sha.startswith(trusted_sha):
+            errors.append(
+                f"HEAD {actual_sha[:12]} does not match expected {trusted_sha[:12]}"
+            )
+
+    if errors:
+        reason = "; ".join(errors)
+        session.verification = RepoVerificationState(
+            status=VerificationStatus.FAILED,
+            owner=trusted_owner, repo=trusted_repo, head_sha=trusted_sha,
+            reason=reason,
+        )
+        return {"verified": False, "reason": reason}
+
     session.verification = RepoVerificationState(
         status=VerificationStatus.VERIFIED,
-        owner=owner, repo=repo, head_sha=head_sha,
+        owner=trusted_owner, repo=trusted_repo, head_sha=trusted_sha,
     )
-    return {"verified": True, "owner": owner, "repo": repo, "head_sha": head_sha}
+    return {"verified": True, "owner": trusted_owner, "repo": trusted_repo, "head_sha": trusted_sha}
 
 
 # --- 3.2 read_file_patch ---
@@ -82,7 +162,7 @@ def read_file_patch(
             for h in f.hunks:
                 hunk_lines = []
                 for line in h.lines:
-                    hunk_lines.append({"content": line.content, "type": line.line_type})
+                    hunk_lines.append({"content": line.content, "type": line.type})
                 hunks.append({"header": h.header, "lines": hunk_lines})
             return {"file": filename, "hunks": hunks, "status": "ok"}
     return {"error": "File not found in PR", "file": filename, "status": "not_found"}
@@ -110,8 +190,8 @@ def search_diff(
                     matches.append({
                         "file": f.filename,
                         "hunk_index": h_idx,
-                        "line_number": line.line_number,
-                        "line_type": line.line_type,
+                        "line_number": line.new_line,
+                        "line_type": line.type,
                         "snippet": line.content.strip()[:200],
                     })
                     if len(matches) >= limit:
@@ -135,20 +215,38 @@ def search_repo(
         return {"error": "Search budget exhausted", "max_searches": session.budget.max_searches}
 
     import os
+    from pathlib import Path
     query_lower = query.lower()
     matches = []
     max_results = min(limit, 50)
     root = session.repo_root
+    root_path = Path(root).resolve()
+
+    resolved_scope = None
+    if path_scope:
+        safe_scope = resolve_safe_path(root, path_scope)
+        if safe_scope:
+            resolved_scope = Path(safe_scope).resolve()
 
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if not is_ignored_directory(d)]
-        rel_dir = os.path.relpath(dirpath, root)
-        if path_scope and not rel_dir.startswith(path_scope) and rel_dir != ".":
-            continue
+
+        if resolved_scope:
+            current_dir = Path(dirpath).resolve()
+            try:
+                current_dir.relative_to(resolved_scope)
+            except ValueError:
+                try:
+                    resolved_scope.relative_to(current_dir)
+                except ValueError:
+                    continue
+
         for fname in filenames:
             fpath = os.path.join(dirpath, fname)
             rel_path = os.path.relpath(fpath, root)
             if is_ignored_directory(rel_path):
+                continue
+            if is_sensitive_file(rel_path):
                 continue
             try:
                 with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
@@ -213,9 +311,18 @@ def read_repo_file(
     except OSError as e:
         return {"error": str(e), "path": path}
 
-    consume_file_read_budget(session)
     content = "\n".join(l["content"] for l in lines)
-    consume_token_budget(session, _estimate_tokens(content))
+    estimated = _estimate_tokens(content)
+    if not check_budget_tokens(session, estimated):
+        return {
+            "error": "Token budget exceeded",
+            "path": path,
+            "estimated_tokens": estimated,
+            "remaining_tokens": max(0, session.budget.max_tokens - session.usage.approximate_tokens),
+        }
+
+    consume_file_read_budget(session)
+    consume_token_budget(session, estimated)
 
     return {
         "path": path,
