@@ -3,7 +3,7 @@ from __future__ import annotations
 from backend.agent_runtime.model.messages import Message, ModelResponse, Role, TokenUsage, ToolResultBlock, ToolUseBlock
 from backend.agent_runtime.runtime.trace import ThinkStep, CallStep, ObserveStep, FinalStep, AgentStep
 from backend.agent_runtime.runtime.results import AgentResult, ToolExecutionResult
-from backend.agent_runtime.tool.protocol import Tool
+from backend.agent_runtime.tool.protocol import Tool, ToolConsentFn
 from backend.agent_runtime.tool.registry import ToolRegistry
 from backend.agent_runtime.model.client import ModelClient
 
@@ -14,6 +14,7 @@ async def run_loop(
     tool_registry: ToolRegistry,
     messages: list[Message],
     max_steps: int = 10,
+    tool_consent: ToolConsentFn | None = None,
 ) -> AgentResult:
     steps: list[AgentStep] = []
     total_usage = TokenUsage()
@@ -66,6 +67,25 @@ async def run_loop(
                     )],
                 ))
                 continue
+
+            if tool.requires_consent and tool_consent is not None:
+                approved = await tool_consent(tool, block.input)
+                if not approved:
+                    consent_output = f"Tool '{block.name}' requires user consent and was denied."
+                    steps.append(ObserveStep(
+                        tool_use_id=block.tool_use_id,
+                        output=consent_output,
+                        is_error=True,
+                    ))
+                    messages.append(Message(
+                        role=Role.TOOL,
+                        content=[ToolResultBlock(
+                            tool_use_id=block.tool_use_id,
+                            content=consent_output,
+                            is_error=True,
+                        )],
+                    ))
+                    continue
 
             try:
                 result = await tool.call(block.input)
