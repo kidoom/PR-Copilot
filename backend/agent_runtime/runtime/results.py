@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .trace import AgentStep
-from .models import TokenUsage
+from backend.agent_runtime.runtime.trace import AgentStep
+from backend.agent_runtime.model.messages import TokenUsage
 
 
 @dataclass

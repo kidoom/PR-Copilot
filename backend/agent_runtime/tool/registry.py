@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from typing import Any
-
-from .agent_def import AgentDefinition
-from .tool import Tool, ToolSchema, project_schema
+from backend.agent_runtime.runtime.agent_def import AgentDefinition
+from backend.agent_runtime.tool.protocol import Tool, ToolSchema, project_schema
 
 TASK_TOOL_NAME = "task"
+DENIED_CHILD_TOOL_NAMES = frozenset({"task", "task_tool", "sub_agent"})
 
 
 class ToolRegistry:
@@ -39,6 +38,6 @@ def filter_tools(
         denied = set(agent_def.disallowed_tools)
         tools = [t for t in tools if t.name not in denied]
 
-    tools = [t for t in tools if t.name != TASK_TOOL_NAME]
+    tools = [t for t in tools if t.name not in DENIED_CHILD_TOOL_NAMES]
 
     return tools
