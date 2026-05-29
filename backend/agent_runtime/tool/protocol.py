@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, Callable, Awaitable
 
 
 class RiskLevel(str, Enum):
@@ -44,8 +44,15 @@ class Tool(ABC):
     @abstractmethod
     def is_concurrency_safe(self) -> bool: ...
 
+    @property
+    def requires_consent(self) -> bool:
+        return not self.is_read_only
+
     @abstractmethod
     async def call(self, input: dict[str, Any]) -> str: ...
+
+
+ToolConsentFn = Callable[[Tool, dict[str, Any]], Awaitable[bool]]
 
 
 def project_schema(tool: Tool) -> ToolSchema:
