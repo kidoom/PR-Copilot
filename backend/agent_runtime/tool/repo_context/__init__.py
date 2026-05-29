@@ -1,4 +1,4 @@
-from backend.repo_context.models import (
+from backend.agent_runtime.tool.repo_context.models import (
     ContextEvidencePackage,
     ContextEvidenceRef,
     ContextFinding,
@@ -14,7 +14,7 @@ from backend.repo_context.models import (
     ToolUsage,
     VerificationStatus,
 )
-from backend.repo_context.registrations import create_context_tools, TOOL_NAME_SET
+from backend.agent_runtime.tool.repo_context.registrations import create_context_tools, TOOL_NAME_SET
 
 __all__ = [
     "ContextEvidencePackage",

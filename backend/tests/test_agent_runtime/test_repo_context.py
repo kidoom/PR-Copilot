@@ -6,7 +6,7 @@ import tempfile
 import pytest
 from typing import Any
 
-from backend.repo_context.models import (
+from backend.agent_runtime.tool.repo_context.models import (
     ContextEvidencePackage,
     ContextEvidenceRef,
     ContextFinding,
@@ -18,7 +18,7 @@ from backend.repo_context.models import (
     ToolUsage,
     VerificationStatus,
 )
-from backend.repo_context.policy import (
+from backend.agent_runtime.tool.repo_context.policy import (
     check_budget_file_read,
     check_budget_search,
     check_budget_tokens,
@@ -31,7 +31,7 @@ from backend.repo_context.policy import (
     require_verification,
     resolve_safe_path,
 )
-from backend.repo_context.tools import (
+from backend.agent_runtime.tool.repo_context.tools import (
     finish_context_package,
     read_check_summary,
     read_file_patch,
@@ -43,7 +43,7 @@ from backend.repo_context.tools import (
     todo_write,
     verify_repo_context,
 )
-from backend.repo_context.registrations import (
+from backend.agent_runtime.tool.repo_context.registrations import (
     create_context_tools,
     TOOL_NAME_SET,
 )
