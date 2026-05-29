@@ -155,8 +155,8 @@ def test_source_binds_evidence_ids():
     )]
     result = build_context_task_plan(ctx, evidence)
     sec_tasks = [t for t in result["tasks"] if t["task_type"] == "security_context"]
-    if sec_tasks:
-        assert any("ev_001" in t["source"]["evidence_ids"] for t in sec_tasks)
+    assert len(sec_tasks) > 0, "planner should generate security_context tasks for high-risk auth files"
+    assert any("ev_001" in t["source"]["evidence_ids"] for t in sec_tasks)
 
 
 def test_source_binds_rule_ids():
@@ -169,8 +169,8 @@ def test_source_binds_rule_ids():
     )]
     result = build_context_task_plan(ctx, evidence)
     sec_tasks = [t for t in result["tasks"] if t["task_type"] == "security_context"]
-    if sec_tasks:
-        assert any("high_risk_path" in t["source"]["rule_ids"] for t in sec_tasks)
+    assert len(sec_tasks) > 0, "planner should generate security_context tasks for high-risk auth files"
+    assert any("high_risk_path" in t["source"]["rule_ids"] for t in sec_tasks)
 
 
 def test_source_binds_signals():
@@ -178,8 +178,8 @@ def test_source_binds_signals():
     ctx = _make_context(files=[f])
     result = build_context_task_plan(ctx, [])
     data_tasks = [t for t in result["tasks"] if t["task_type"] == "data_context"]
-    if data_tasks:
-        assert any("db_path" in t["source"]["signals"] for t in data_tasks)
+    assert len(data_tasks) > 0, "planner should generate data_context tasks for db_path risk hint"
+    assert any("db_path" in t["source"]["signals"] for t in data_tasks)
 
 
 def test_source_binds_file_facts():
@@ -187,8 +187,8 @@ def test_source_binds_file_facts():
     ctx = _make_context(files=[f])
     result = build_context_task_plan(ctx, [])
     ref_tasks = [t for t in result["tasks"] if t["task_type"] == "reference_context"]
-    if ref_tasks:
-        assert any("src/main.py" in t["source"]["file_facts"] for t in ref_tasks)
+    assert len(ref_tasks) > 0, "planner should generate reference_context tasks for source files"
+    assert any("src/main.py" in t["source"]["file_facts"] for t in ref_tasks)
 
 
 # --- 6.4 Self-contained targets, queries, budgets, expected outputs, fallbacks ---
