@@ -10,13 +10,13 @@ class ParsedPRUrl:
 
 
 _PR_URL_PATTERN = re.compile(
-    r"https?://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/pull/(?P<number>\d+)"
+    r"https?://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/pull/(?P<number>\d+)(?:/.*)?$"
 )
 
 
 def parse_pr_url(url: str) -> ParsedPRUrl:
     """Parse a GitHub PR URL and extract owner, repo, pull_number."""
-    match = _PR_URL_PATTERN.search(url)
+    match = _PR_URL_PATTERN.fullmatch(url.strip())
     if not match:
         raise ValueError(
             f"Invalid GitHub PR URL: {url}. "

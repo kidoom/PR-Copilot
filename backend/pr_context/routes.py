@@ -45,7 +45,10 @@ async def create_context(req: ContextRequest):
     finally:
         await client.close()
 
-    ctx = await build_pr_context(pr_raw, commits_raw, files_raw)
+    ctx = await build_pr_context(
+        pr_raw, commits_raw, files_raw,
+        owner=parsed.owner, repo=parsed.repo, pull_number=parsed.pull_number,
+    )
     return get_overview_view(ctx)
 
 
@@ -59,13 +62,18 @@ async def patch_index(context_id: str):
 
 
 @router.get("/context/{context_id}/files/{filename:path}/patch")
-async def file_patch(context_id: str, filename: str, hunk_index: int | None = None):
+async def file_patch(
+    context_id: str,
+    filename: str,
+    hunk_index: int | None = None,
+    max_lines: int = 500,
+):
     """Return patch data for a specific file."""
     ctx = get_context(context_id)
     if ctx is None:
         raise HTTPException(status_code=404, detail="Context not found")
     try:
-        return get_file_patch(ctx, filename, hunk_index)
+        return get_file_patch(ctx, filename, hunk_index, max_lines=max_lines)
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except IndexError as e:
