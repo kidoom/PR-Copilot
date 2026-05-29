@@ -39,3 +39,47 @@ export interface PrContextResponse {
   files: FileEntry[]
   derived: DerivedSignals
 }
+
+export interface TopDirectory {
+  directory: string
+  file_count: number
+}
+
+export interface PatchLine {
+  type: "added" | "removed" | "context"
+  content: string
+  old_line: number | null
+  new_line: number | null
+}
+
+export interface PatchHunk {
+  header: string
+  old_start: number
+  old_lines: number
+  new_start: number
+  new_lines: number
+  lines: PatchLine[]
+}
+
+export interface FilePatchResponse {
+  context_id: string
+  filename: string
+  patch_available: boolean
+  is_binary: boolean
+  parse_error: string | null
+  truncated: boolean
+  hunks: PatchHunk[]
+}
+
+export interface IntakeSummary {
+  context_id: string
+  size: "small" | "medium" | "large"
+  change_type: "docs" | "test" | "source" | "config" | "mixed"
+  docs_only: boolean
+  source_without_tests: boolean
+  has_high_risk_paths: boolean
+  language_distribution: Record<string, number>
+  file_type_distribution: Record<string, number>
+  top_directories: TopDirectory[]
+  notable_signals: string[]
+}
