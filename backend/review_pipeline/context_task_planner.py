@@ -112,6 +112,8 @@ INTENTS = [
     "find_references",
     "verify_security_evidence",
     "inspect_ci_status",
+    "inspect_config_impact",
+    "inspect_dependency_impact",
     "inspect_data_impact",
     "inspect_runtime_risk",
     "inspect_patch_complexity",
@@ -506,7 +508,7 @@ def _generate_config_context_tasks(ctx: PRContext, evidence: list[EvidenceItem])
             covered_files.add(f.filename)
             tasks.append(_make_task(
                 task_type="config_context",
-                intent="inspect_ci_status",
+                intent="inspect_config_impact",
                 source=TaskSource(file_facts=[f.filename], signals=["config_file_changed"]),
                 target=TaskTarget(files=[f.filename], keywords=_file_keywords(f)),
                 queries=[f"inspect config file {f.filename}", "check CI status and workflow impact"],
@@ -526,7 +528,7 @@ def _generate_config_context_tasks(ctx: PRContext, evidence: list[EvidenceItem])
             covered_files.add(f.filename)
             tasks.append(_make_task(
                 task_type="config_context",
-                intent="inspect_ci_status",
+                intent="inspect_config_impact",
                 source=TaskSource(signals=["config_path"], file_facts=[f.filename]),
                 target=TaskTarget(files=[f.filename], keywords=_file_keywords(f)),
                 queries=[f"inspect config impact of {f.filename}"],
@@ -548,7 +550,7 @@ def _generate_config_context_tasks(ctx: PRContext, evidence: list[EvidenceItem])
             covered_files.add(f.filename)
             tasks.append(_make_task(
                 task_type="config_context",
-                intent="inspect_ci_status",
+                intent="inspect_dependency_impact",
                 source=TaskSource(file_facts=[f.filename], signals=["dependency_file_changed"]),
                 target=TaskTarget(files=[f.filename], keywords=_file_keywords(f)),
                 queries=[f"inspect dependency changes in {f.filename}"],
@@ -745,10 +747,17 @@ def build_context_task_plan(ctx: PRContext, evidence: list[EvidenceItem] | None 
     all_tasks.extend(_generate_data_context_tasks(ctx, evidence))
     all_tasks.extend(_generate_runtime_context_tasks(ctx, evidence))
 
-    # Track files covered by specific tasks for patch_deep_dive
+    # Track files covered by specific (non-reference) tasks for patch_deep_dive
+    # reference_context and patch_deep_dive can coexist: one finds callers,
+    # the other inspects patch complexity
+    _DEEP_DIVE_COVERAGE_TYPES = {
+        "test_context", "security_context", "config_context",
+        "data_context", "runtime_context",
+    }
     covered_files: set[str] = set()
     for t in all_tasks:
-        covered_files.update(t.target.files)
+        if t.task_type in _DEEP_DIVE_COVERAGE_TYPES:
+            covered_files.update(t.target.files)
 
     all_tasks.extend(_generate_patch_deep_dive_tasks(ctx, covered_files))
 
