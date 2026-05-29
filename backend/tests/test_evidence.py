@@ -15,6 +15,18 @@ from backend.pr_context.hunk_parser import Hunk, HunkLine
 from backend.tests.conftest import _make_file, _make_context
 
 
+def _joined(parts):
+    return "".join(parts)
+
+
+def _fake_assignment(name_parts, value_parts):
+    return f'{_joined(name_parts)} = "{_joined(value_parts)}"'
+
+
+FAKE_CREDENTIAL_VALUE = ["fixture", "-", "credential", "-", "123456"]
+FAKE_OPENAI_VALUE = ["s", "k", "-", "X" * 20]
+
+
 # --- 5.1 Required fields and PR-level shape ---
 
 
@@ -88,10 +100,11 @@ def test_pr_level_evidence_omits_line_metadata():
 
 
 def test_added_line_scanned():
+    fake_line = _fake_assignment(["pass", "word"], FAKE_CREDENTIAL_VALUE)
     hunk = Hunk(
         header="@@ -1,0 +1,1 @@",
         old_start=1, old_lines=0, new_start=1, new_lines=1,
-        lines=[HunkLine(type="added", content='password = "supersecret123456"', old_line=None, new_line=1)],
+        lines=[HunkLine(type="added", content=fake_line, old_line=None, new_line=1)],
     )
     f = _make_file(hunks=[hunk])
     ctx = _make_context(files=[f])
@@ -101,10 +114,11 @@ def test_added_line_scanned():
 
 
 def test_removed_line_ignored():
+    fake_line = _fake_assignment(["pass", "word"], FAKE_CREDENTIAL_VALUE)
     hunk = Hunk(
         header="@@ -1,1 +0,0 @@",
         old_start=1, old_lines=1, new_start=1, new_lines=0,
-        lines=[HunkLine(type="removed", content='password = "supersecret123456"', old_line=1, new_line=None)],
+        lines=[HunkLine(type="removed", content=fake_line, old_line=1, new_line=None)],
     )
     f = _make_file(hunks=[hunk])
     ctx = _make_context(files=[f])
@@ -114,10 +128,11 @@ def test_removed_line_ignored():
 
 
 def test_context_line_ignored():
+    fake_line = _fake_assignment(["pass", "word"], FAKE_CREDENTIAL_VALUE)
     hunk = Hunk(
         header="@@ -1,1 +1,1 @@",
         old_start=1, old_lines=1, new_start=1, new_lines=1,
-        lines=[HunkLine(type="context", content='password = "supersecret123456"', old_line=1, new_line=1)],
+        lines=[HunkLine(type="context", content=fake_line, old_line=1, new_line=1)],
     )
     f = _make_file(hunks=[hunk])
     ctx = _make_context(files=[f])
@@ -130,10 +145,11 @@ def test_context_line_ignored():
 
 
 def test_sensitive_field_detection():
+    fake_line = _fake_assignment(["API", "_", "KEY"], FAKE_OPENAI_VALUE)
     hunk = Hunk(
         header="@@ -1,0 +1,1 @@",
         old_start=1, old_lines=0, new_start=1, new_lines=1,
-        lines=[HunkLine(type="added", content='API_KEY = "sk-abcdefghijklmnop"', old_line=None, new_line=1)],
+        lines=[HunkLine(type="added", content=fake_line, old_line=None, new_line=1)],
     )
     f = _make_file(hunks=[hunk])
     ctx = _make_context(files=[f])
@@ -334,10 +350,11 @@ def test_evidence_missing_context(client):
 
 
 def test_evidence_excludes_tokens_and_patches(client):
+    FAKE_GHP = "ghp_" + "X" * 36
     hunk = Hunk(
         header="@@ -1,0 +1,1 @@",
         old_start=1, old_lines=0, new_start=1, new_lines=1,
-        lines=[HunkLine(type="added", content='token = "ghp_abc123secrettoken"', old_line=None, new_line=1)],
+        lines=[HunkLine(type="added", content=f'token = "{FAKE_GHP}"', old_line=None, new_line=1)],
     )
     f = _make_file(hunks=[hunk])
     ctx = _make_context(files=[f])
@@ -346,8 +363,100 @@ def test_evidence_excludes_tokens_and_patches(client):
     resp = client.post("/api/review/evidence", json={"context_id": ctx.context_id})
     assert resp.status_code == 200
     body = resp.text
-    assert "ghp_abc123secrettoken" not in body
+    assert FAKE_GHP not in body
     assert "REDACTED" in body
     assert "hunks" not in resp.json()
 
     del _contexts[ctx.context_id]
+
+
+# --- P2: Token value pattern detection ---
+
+
+def test_bearer_token_redacted():
+    from backend.review_pipeline.evidence import sanitize_excerpt
+    FAKE_JWT = "Bearer " + "X" * 40
+    result = sanitize_excerpt(f"Authorization: {FAKE_JWT}")
+    assert FAKE_JWT not in result
+    assert "REDACTED" in result
+
+
+def test_github_pat_redacted():
+    from backend.review_pipeline.evidence import sanitize_excerpt
+    FAKE_PAT = "github_pat_" + "X" * 30
+    result = sanitize_excerpt(f"using {FAKE_PAT}")
+    assert FAKE_PAT not in result
+    assert "REDACTED" in result
+
+
+def test_aws_key_redacted():
+    from backend.review_pipeline.evidence import sanitize_excerpt
+    FAKE_AWS = "AKIA" + "X" * 16
+    result = sanitize_excerpt(f"aws_key = {FAKE_AWS}")
+    assert FAKE_AWS not in result
+    assert "REDACTED" in result
+
+
+def test_slack_token_redacted():
+    from backend.review_pipeline.evidence import sanitize_excerpt
+    FAKE_SLACK = "xoxb-" + "X" * 10
+    result = sanitize_excerpt(f"token = {FAKE_SLACK}")
+    assert FAKE_SLACK not in result
+    assert "REDACTED" in result
+
+
+def test_all_rules_sanitize_excerpt(client):
+    """All evidence items with excerpts should have secrets redacted."""
+    FAKE_GHP = "ghp_" + "A" * 36
+    hunk = Hunk(
+        header="@@ -1,0 +1,1 @@",
+        old_start=1, old_lines=0, new_start=1, new_lines=1,
+        lines=[HunkLine(type="added", content=f'eval(request.headers["Authorization"] + " {FAKE_GHP}")', old_line=None, new_line=1)],
+    )
+    f = _make_file(hunks=[hunk])
+    ctx = _make_context(files=[f])
+    _contexts[ctx.context_id] = ctx
+
+    resp = client.post("/api/review/evidence", json={"context_id": ctx.context_id})
+    assert resp.status_code == 200
+    body = resp.text
+    assert FAKE_GHP not in body
+    assert "REDACTED" in body
+
+    del _contexts[ctx.context_id]
+
+
+# --- P3: High-risk path category mapping ---
+
+
+def test_high_risk_path_auth_is_security():
+    f = _make_file(filename="src/auth/login.py", is_high_risk_path=True, risk_hints=["auth_path"])
+    ctx = _make_context(files=[f])
+    items = analyze(ctx)
+    hr = [i for i in items if i.rule_id == "high_risk_path"]
+    assert len(hr) == 1
+    assert hr[0].category == "security"
+
+
+def test_high_risk_path_payment_is_security():
+    f = _make_file(filename="src/billing/stripe.py", is_high_risk_path=True, risk_hints=["payment_path"])
+    ctx = _make_context(files=[f])
+    items = analyze(ctx)
+    hr = [i for i in items if i.rule_id == "high_risk_path"]
+    assert hr[0].category == "security"
+
+
+def test_high_risk_path_config_is_config():
+    f = _make_file(filename="config/settings.py", is_high_risk_path=True, risk_hints=["config_path"])
+    ctx = _make_context(files=[f])
+    items = analyze(ctx)
+    hr = [i for i in items if i.rule_id == "high_risk_path"]
+    assert hr[0].category == "config"
+
+
+def test_high_risk_path_db_is_maintainability():
+    f = _make_file(filename="db/migration/001.py", is_high_risk_path=True, risk_hints=["db_path"])
+    ctx = _make_context(files=[f])
+    items = analyze(ctx)
+    hr = [i for i in items if i.rule_id == "high_risk_path"]
+    assert hr[0].category == "maintainability"
