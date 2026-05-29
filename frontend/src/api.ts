@@ -1,4 +1,4 @@
-import type { PrContextResponse } from "./types"
+import type { PrContextResponse, IntakeSummary } from "./types"
 
 type UnknownRecord = Record<string, unknown>
 
@@ -90,4 +90,19 @@ export async function analyzePr(
   }
 
   return normalizePrContextResponse(await res.json())
+}
+
+export async function getIntakeSummary(contextId: string): Promise<IntakeSummary> {
+  const res = await fetch("/api/review/intake", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ context_id: contextId }),
+  })
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ detail: "Unknown error" }))
+    throw new Error(body.detail || `Request failed: ${res.status}`)
+  }
+
+  return res.json()
 }

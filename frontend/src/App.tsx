@@ -19,6 +19,9 @@ import {
   Settings,
   Code,
   Binary,
+  BarChart3,
+  FolderOpen,
+  Layers,
 } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
@@ -40,8 +43,8 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { analyzePr } from "@/api"
-import type { PrContextResponse, FileEntry } from "@/types"
+import { analyzePr, getIntakeSummary } from "@/api"
+import type { PrContextResponse, FileEntry, IntakeSummary } from "@/types"
 
 function getStatusBadgeVariant(status: string) {
   if (status === "added") return "default" as const
@@ -56,6 +59,38 @@ function getFileTypeIcon(file: FileEntry) {
   if (file.is_binary) return <Binary className="h-3.5 w-3.5" />
   if (file.is_source) return <Code className="h-3.5 w-3.5" />
   return <FileCode className="h-3.5 w-3.5" />
+}
+
+function getRiskHintLabel(hint: string) {
+  const labels: Record<string, string> = {
+    auth_path: "Auth",
+    payment_path: "Payment",
+    db_path: "Database",
+    config_path: "Config",
+    no_test_pair: "No tests",
+  }
+
+  return labels[hint] ?? hint.replaceAll("_", " ")
+}
+
+function getRiskHintClassName(hint: string) {
+  if (hint === "auth_path" || hint === "payment_path") {
+    return "border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300"
+  }
+
+  if (hint === "db_path") {
+    return "border-orange-200 bg-orange-50 text-orange-700 dark:border-orange-900/60 dark:bg-orange-950/30 dark:text-orange-300"
+  }
+
+  if (hint === "config_path") {
+    return "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900/60 dark:bg-blue-950/30 dark:text-blue-300"
+  }
+
+  if (hint === "no_test_pair") {
+    return "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300"
+  }
+
+  return "border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300"
 }
 
 function getErrorGuidance(error: string): string {
@@ -160,7 +195,7 @@ function LoadingState() {
   )
 }
 
-function ResultDashboard({ result }: { result: PrContextResponse }) {
+function ResultDashboard({ result, intake }: { result: PrContextResponse; intake: IntakeSummary | null }) {
   const hasHighRisk = result.derived.high_risk_files.length > 0
   const hasSourceWithoutTests = result.derived.has_source_without_tests
   const isDocsOnly = result.derived.docs_only
@@ -232,6 +267,91 @@ function ResultDashboard({ result }: { result: PrContextResponse }) {
           </CardContent>
         </Card>
       </div>
+
+      {/* Intake Summary */}
+      {intake && (
+        <div className="grid gap-4 md:grid-cols-3">
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex items-center gap-2">
+                <Layers className="h-4 w-4" />
+                <CardTitle className="text-sm font-medium">PR Size</CardTitle>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <Badge
+                variant={
+                  intake.size === "large"
+                    ? "destructive"
+                    : intake.size === "medium"
+                      ? "secondary"
+                      : "default"
+                }
+                className="text-base"
+              >
+                {intake.size}
+              </Badge>
+              <div className="mt-2 text-xs text-muted-foreground">
+                {intake.change_type === "docs" && "Documentation changes only"}
+                {intake.change_type === "test" && "Test changes only"}
+                {intake.change_type === "config" && "Configuration changes only"}
+                {intake.change_type === "source" && "Source code changes"}
+                {intake.change_type === "mixed" && "Mixed change types"}
+              </div>
+              {intake.notable_signals.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {intake.notable_signals.map((s) => (
+                    <Badge key={s} variant="outline" className="text-xs">
+                      {s.replace(/_/g, " ")}
+                    </Badge>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex items-center gap-2">
+                <BarChart3 className="h-4 w-4" />
+                <CardTitle className="text-sm font-medium">Language Distribution</CardTitle>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-1.5">
+                {Object.entries(intake.language_distribution)
+                  .sort(([, a], [, b]) => b - a)
+                  .slice(0, 5)
+                  .map(([lang, count]) => (
+                    <div key={lang} className="flex items-center justify-between text-xs">
+                      <span className="font-mono">{lang}</span>
+                      <Badge variant="secondary">{count}</Badge>
+                    </div>
+                  ))}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex items-center gap-2">
+                <FolderOpen className="h-4 w-4" />
+                <CardTitle className="text-sm font-medium">Top Directories</CardTitle>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-1.5">
+                {intake.top_directories.slice(0, 5).map((d) => (
+                  <div key={d.directory} className="flex items-center justify-between text-xs">
+                    <span className="truncate font-mono">{d.directory}</span>
+                    <Badge variant="secondary">{d.file_count}</Badge>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       {/* PR Info + Risk Signals Row */}
       <div className="grid gap-4 lg:grid-cols-2">
@@ -426,13 +546,18 @@ function ResultDashboard({ result }: { result: PrContextResponse }) {
                           <Badge
                             key={h}
                             variant="outline"
-                            className="text-xs"
+                            className={getRiskHintClassName(h)}
                           >
-                            {h}
+                            {getRiskHintLabel(h)}
                           </Badge>
                         ))
                       ) : (
-                        <span className="text-xs text-muted-foreground">None</span>
+                        <Badge
+                          variant="outline"
+                          className="border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300"
+                        >
+                          None
+                        </Badge>
                       )}
                     </div>
                   </TableCell>
@@ -538,6 +663,7 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<PrContextResponse | null>(null)
+  const [intake, setIntake] = useState<IntakeSummary | null>(null)
   const contentState = loading
     ? "loading"
     : result
@@ -554,9 +680,16 @@ function App() {
     setLoading(true)
     setError(null)
     setResult(null)
+    setIntake(null)
     try {
       const data = await analyzePr(prUrl)
       setResult(data)
+      try {
+        const intakeData = await getIntakeSummary(data.context_id)
+        setIntake(intakeData)
+      } catch {
+        // intake is optional, don't block on failure
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Request failed"
       setError(msg)
@@ -642,7 +775,7 @@ function App() {
             </Alert>
           )}
           {contentState === "empty" && <EmptyState />}
-          {contentState === "result" && result && <ResultDashboard result={result} />}
+          {contentState === "result" && result && <ResultDashboard result={result} intake={intake} />}
         </section>
       </main>
     </div>

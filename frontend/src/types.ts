@@ -39,3 +39,21 @@ export interface PrContextResponse {
   files: FileEntry[]
   derived: DerivedSignals
 }
+
+export interface TopDirectory {
+  directory: string
+  file_count: number
+}
+
+export interface IntakeSummary {
+  context_id: string
+  size: "small" | "medium" | "large"
+  change_type: "docs" | "test" | "source" | "config" | "mixed"
+  docs_only: boolean
+  source_without_tests: boolean
+  has_high_risk_paths: boolean
+  language_distribution: Record<string, number>
+  file_type_distribution: Record<string, number>
+  top_directories: TopDirectory[]
+  notable_signals: string[]
+}
