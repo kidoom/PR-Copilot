@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from backend.agent_runtime.agent_def import AgentDefinition, AgentRegistry, UnknownAgentError
-from backend.agent_runtime.sub_agent import SubAgentResult
-from backend.agent_runtime.task_tool import TaskTool, TaskToolError, DEFAULT_MAX_STEPS, ABSOLUTE_MAX_STEPS
+from backend.agent_runtime.runtime.agent_def import AgentDefinition, AgentRegistry, UnknownAgentError
+from backend.agent_runtime.runtime.sub_agent import SubAgentResult
+from backend.agent_runtime.runtime.task_tool import TaskTool, TaskToolError, DEFAULT_MAX_STEPS, ABSOLUTE_MAX_STEPS
 
 
 # --- Fake runner ---

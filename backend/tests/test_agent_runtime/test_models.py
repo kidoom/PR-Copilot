@@ -1,4 +1,4 @@
-from backend.agent_runtime.models import (
+from backend.agent_runtime.model.messages import (
     Message,
     ModelResponse,
     Role,

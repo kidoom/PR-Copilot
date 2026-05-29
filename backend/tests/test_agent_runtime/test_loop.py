@@ -3,11 +3,11 @@ from __future__ import annotations
 import pytest
 from typing import Any
 
-from backend.agent_runtime.models import Message, ModelResponse, Role, TokenUsage, ToolUseBlock
-from backend.agent_runtime.model_client import ModelClient
-from backend.agent_runtime.loop import run_loop
-from backend.agent_runtime.registry import ToolRegistry
-from backend.agent_runtime.tool import RiskLevel, Tool
+from backend.agent_runtime.model.messages import Message, ModelResponse, Role, TokenUsage, ToolUseBlock
+from backend.agent_runtime.model.client import ModelClient
+from backend.agent_runtime.runtime.loop import run_loop
+from backend.agent_runtime.tool.registry import ToolRegistry
+from backend.agent_runtime.tool.protocol import RiskLevel, Tool
 
 
 # --- Fake model client ---

@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from typing import Any
-
-from .agent_def import AgentDefinition
-from .tool import Tool, ToolSchema, project_schema
+from backend.agent_runtime.runtime.agent_def import AgentDefinition
+from backend.agent_runtime.tool.protocol import Tool, ToolSchema, project_schema
 
 TASK_TOOL_NAME = "task"
 

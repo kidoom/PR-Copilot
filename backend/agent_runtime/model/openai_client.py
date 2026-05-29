@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import json
-import uuid
 from typing import Any
 
 import httpx
 
-from .config import ModelConfig
-from .model_client import ModelClient
-from .models import Message, ModelResponse, Role, TokenUsage, ToolResultBlock, ToolUseBlock
-from .tool import ToolSchema
+from backend.agent_runtime.model.config import ModelConfig
+from backend.agent_runtime.model.client import ModelClient
+from backend.agent_runtime.model.messages import (
+    Message,
+    ModelResponse,
+    Role,
+    TokenUsage,
+    ToolResultBlock,
+    ToolUseBlock,
+)
+from backend.agent_runtime.tool.protocol import ToolSchema
 
 
 def build_tools_param(schemas: list[ToolSchema]) -> list[dict[str, Any]]:

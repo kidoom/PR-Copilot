@@ -5,9 +5,6 @@ from enum import Enum
 from typing import Any
 
 
-# --- Tool use / result blocks ---
-
-
 @dataclass(frozen=True)
 class ToolUseBlock:
     tool_use_id: str
@@ -22,16 +19,10 @@ class ToolResultBlock:
     is_error: bool = False
 
 
-# --- Token usage ---
-
-
 @dataclass(frozen=True)
 class TokenUsage:
     input_tokens: int = 0
     output_tokens: int = 0
-
-
-# --- Messages ---
 
 
 class Role(str, Enum):
@@ -46,9 +37,6 @@ class Message:
     role: Role
     content: str | list[ToolUseBlock | ToolResultBlock] = ""
     token_usage: TokenUsage | None = None
-
-
-# --- Model response ---
 
 
 @dataclass

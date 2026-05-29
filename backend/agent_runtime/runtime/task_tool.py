@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any, Callable, Awaitable
 
-from .agent_def import AgentDefinition, AgentRegistry, UnknownAgentError
-from .sub_agent import SubAgentResult
+from backend.agent_runtime.runtime.agent_def import AgentDefinition, AgentRegistry, UnknownAgentError
+from backend.agent_runtime.runtime.sub_agent import SubAgentResult
 
 Runner = Callable[[AgentDefinition, str, int], Awaitable[SubAgentResult]]
 

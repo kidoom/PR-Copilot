@@ -2,20 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .trace import AgentStep
-from .models import TokenUsage
+from backend.agent_runtime.runtime.trace import AgentStep
+from backend.agent_runtime.model.messages import TokenUsage
 
 
-@dataclass
-class ToolExecutionResult:
-    tool_use_id: str
+@dataclass(frozen=True)
+class SubAgentResult:
     output: str
-    is_error: bool = False
-
-
-@dataclass
-class AgentResult:
-    output: str
+    agent_type: str
     steps: list[AgentStep] = field(default_factory=list)
     token_usage: TokenUsage = field(default_factory=TokenUsage)
     stopped_by_max_steps: bool = False

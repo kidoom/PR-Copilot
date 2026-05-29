@@ -6,10 +6,10 @@ from typing import Any
 
 import httpx
 
-from backend.agent_runtime.config import ModelConfig
-from backend.agent_runtime.models import Message, Role, ToolUseBlock, ToolResultBlock
-from backend.agent_runtime.openai_client import OpenAIModelClient, build_tools_param, _convert_message, _parse_response
-from backend.agent_runtime.tool import ToolSchema
+from backend.agent_runtime.model.config import ModelConfig
+from backend.agent_runtime.model.messages import Message, Role, ToolUseBlock, ToolResultBlock
+from backend.agent_runtime.model.openai_client import OpenAIModelClient, build_tools_param, _convert_message, _parse_response
+from backend.agent_runtime.tool.protocol import ToolSchema
 
 
 # --- Fixtures ---

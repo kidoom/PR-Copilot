@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from .models import Message, ModelResponse
+from backend.agent_runtime.model.messages import Message, ModelResponse
 
 
 class ModelClient(ABC):

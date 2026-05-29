@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from .models import Message, ModelResponse, Role, ToolResultBlock, ToolUseBlock, TokenUsage
-from .trace import ThinkStep, CallStep, ObserveStep, FinalStep, AgentStep
-from .results import AgentResult, ToolExecutionResult
-from .tool import Tool
-from .registry import ToolRegistry
-from .model_client import ModelClient
+from backend.agent_runtime.model.messages import Message, ModelResponse, Role, TokenUsage, ToolResultBlock, ToolUseBlock
+from backend.agent_runtime.runtime.trace import ThinkStep, CallStep, ObserveStep, FinalStep, AgentStep
+from backend.agent_runtime.runtime.results import AgentResult, ToolExecutionResult
+from backend.agent_runtime.tool.protocol import Tool
+from backend.agent_runtime.tool.registry import ToolRegistry
+from backend.agent_runtime.model.client import ModelClient
 
 
 async def run_loop(

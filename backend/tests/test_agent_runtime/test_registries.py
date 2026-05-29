@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from backend.agent_runtime.tool import RiskLevel, Tool, ToolSchema, project_schema
-from backend.agent_runtime.registry import ToolRegistry, filter_tools
-from backend.agent_runtime.agent_def import AgentDefinition, AgentRegistry, UnknownAgentError
+from backend.agent_runtime.tool.protocol import RiskLevel, Tool, ToolSchema, project_schema
+from backend.agent_runtime.tool.registry import ToolRegistry, filter_tools
+from backend.agent_runtime.runtime.agent_def import AgentDefinition, AgentRegistry, UnknownAgentError
 
 
 # --- Fake tool for tests ---
