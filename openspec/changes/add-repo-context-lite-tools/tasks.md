@@ -7,11 +7,11 @@
 
 ## 2. Policy And Safety
 
-- [ ] 2.1 Implement repository path resolution that rejects traversal and paths outside the verified repository root
-- [ ] 2.2 Implement ignored-directory filtering for search and file reads
-- [ ] 2.3 Implement sensitive-file detection that blocks or summarizes raw content from secret-bearing paths
-- [ ] 2.4 Implement budget tracking for search count, file read count, and approximate token output
-- [ ] 2.5 Implement verification gating so repository-content tools fail until repo context is verified
+- [x] 2.1 Implement repository path resolution that rejects traversal and paths outside the verified repository root
+- [x] 2.2 Implement ignored-directory filtering for search and file reads
+- [x] 2.3 Implement sensitive-file detection that blocks or summarizes raw content from secret-bearing paths
+- [x] 2.4 Implement budget tracking for search count, file read count, and approximate token output
+- [x] 2.5 Implement verification gating so repository-content tools fail until repo context is verified
 
 ## 3. RepoContext Lite Tools
 

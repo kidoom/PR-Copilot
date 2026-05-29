@@ -13,6 +13,13 @@ from .constants import (
     MAX_SNIPPET_LINES,
     SENSITIVE_PATH_PATTERNS,
 )
+from .policy import (
+    check_budget_exceeded,
+    filter_ignored_paths,
+    is_ignored_directory,
+    is_sensitive_path,
+    safe_resolve_path,
+)
 
 __all__ = [
     "ContextEvidencePackage",
@@ -26,4 +33,9 @@ __all__ = [
     "RepoVerificationState",
     "SENSITIVE_PATH_PATTERNS",
     "ToolUsage",
+    "check_budget_exceeded",
+    "filter_ignored_paths",
+    "is_ignored_directory",
+    "is_sensitive_path",
+    "safe_resolve_path",
 ]
