@@ -1,0 +1,937 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PR Copilot Data Structures</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --surface2: #1c2333;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text2: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --orange: #d29922;
+    --red: #f85149;
+    --purple: #bc8cff;
+    --cyan: #39d353;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }
+  .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+
+  /* Header */
+  .header { text-align: center; padding: 40px 0 30px; border-bottom: 1px solid var(--border); margin-bottom: 30px; }
+  .header h1 { font-size: 28px; margin-bottom: 8px; }
+  .header p { color: var(--text2); font-size: 14px; }
+
+  /* Pipeline Overview */
+  .pipeline { display: flex; gap: 12px; justify-content: center; align-items: center; flex-wrap: wrap; margin: 30px 0; }
+  .pipeline-stage { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px 20px; text-align: center; min-width: 180px; cursor: pointer; transition: all .2s; }
+  .pipeline-stage:hover, .pipeline-stage.active { border-color: var(--accent); box-shadow: 0 0 12px rgba(88,166,255,.15); }
+  .pipeline-stage .num { font-size: 11px; color: var(--accent); text-transform: uppercase; letter-spacing: 1px; }
+  .pipeline-stage .name { font-size: 15px; font-weight: 600; margin-top: 4px; }
+  .pipeline-arrow { color: var(--text2); font-size: 20px; }
+
+  /* Nav tabs */
+  .nav { display: flex; gap: 4px; margin-bottom: 24px; border-bottom: 1px solid var(--border); padding-bottom: 0; overflow-x: auto; }
+  .nav-btn { background: none; border: none; color: var(--text2); padding: 10px 16px; font-size: 13px; cursor: pointer; border-bottom: 2px solid transparent; white-space: nowrap; transition: all .2s; }
+  .nav-btn:hover { color: var(--text); }
+  .nav-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  /* Section */
+  .section { display: none; }
+  .section.active { display: block; }
+
+  /* Struct card */
+  .struct-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 20px; overflow: hidden; }
+  .struct-header { padding: 14px 18px; display: flex; align-items: center; gap: 12px; cursor: pointer; user-select: none; }
+  .struct-header:hover { background: var(--surface2); }
+  .struct-name { font-size: 16px; font-weight: 600; font-family: 'SFMono-Regular', Consolas, monospace; }
+  .struct-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: rgba(88,166,255,.15); color: var(--accent); }
+  .struct-file { font-size: 12px; color: var(--text2); margin-left: auto; font-family: monospace; }
+  .struct-toggle { color: var(--text2); transition: transform .2s; font-size: 12px; }
+  .struct-toggle.open { transform: rotate(90deg); }
+  .struct-body { display: none; padding: 0 18px 14px; }
+  .struct-body.open { display: block; }
+
+  /* Table */
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; padding: 8px 12px; color: var(--text2); font-weight: 500; border-bottom: 1px solid var(--border); font-size: 12px; text-transform: uppercase; letter-spacing: .5px; }
+  td { padding: 8px 12px; border-bottom: 1px solid rgba(48,54,61,.5); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(88,166,255,.04); }
+  .type { color: var(--purple); font-family: monospace; font-size: 12px; }
+  .field-name { font-family: monospace; color: var(--cyan); font-size: 13px; }
+  .desc { color: var(--text2); font-size: 12px; }
+  .default { color: var(--orange); font-family: monospace; font-size: 12px; }
+  .required { color: var(--red); font-size: 11px; }
+
+  /* Enum / constants */
+  .enum-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 16px; padding: 14px 18px; }
+  .enum-title { font-size: 14px; font-weight: 600; margin-bottom: 10px; color: var(--orange); font-family: monospace; }
+  .enum-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 6px; }
+  .enum-item { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 4px 8px; border-radius: 4px; background: var(--surface2); }
+  .enum-key { font-family: monospace; color: var(--cyan); }
+  .enum-val { font-family: monospace; color: var(--orange); margin-left: auto; }
+  .enum-desc { color: var(--text2); }
+
+  /* Flow diagram */
+  .flow { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .flow pre { font-family: 'SFMono-Regular', Consolas, monospace; font-size: 13px; line-height: 1.5; color: var(--text2); white-space: pre; }
+
+  /* API table */
+  .api-method { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; font-family: monospace; }
+  .api-get { background: rgba(63,185,80,.15); color: var(--green); }
+  .api-post { background: rgba(88,166,255,.15); color: var(--accent); }
+
+  /* Search */
+  .search-box { width: 100%; padding: 10px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 14px; margin-bottom: 20px; outline: none; }
+  .search-box:focus { border-color: var(--accent); }
+  .search-box::placeholder { color: var(--text2); }
+
+  /* Responsive */
+  @media (max-width: 768px) {
+    .pipeline { flex-direction: column; }
+    .pipeline-arrow { transform: rotate(90deg); }
+    .struct-file { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <div class="header">
+    <h1>PR Copilot Data Structures</h1>
+    <p>Pipeline stages, data models, and field definitions</p>
+  </div>
+
+  <!-- Pipeline Overview -->
+  <div class="pipeline">
+    <div class="pipeline-stage active" onclick="showStage(0)">
+      <div class="num">Stage 1</div>
+      <div class="name">Ingest</div>
+    </div>
+    <div class="pipeline-arrow">&rarr;</div>
+    <div class="pipeline-stage" onclick="showStage(1)">
+      <div class="num">Stage 2</div>
+      <div class="name">Review Pipeline</div>
+    </div>
+    <div class="pipeline-arrow">&rarr;</div>
+    <div class="pipeline-stage" onclick="showStage(2)">
+      <div class="num">Stage 3</div>
+      <div class="name">Task Planner</div>
+    </div>
+  </div>
+
+  <input type="text" class="search-box" placeholder="Search fields, types, or descriptions..." oninput="filterAll(this.value)">
+
+  <!-- Nav -->
+  <div class="nav" id="nav">
+    <button class="nav-btn active" onclick="showTab('ingest', this)">Ingest</button>
+    <button class="nav-btn" onclick="showTab('diff', this)">Diff Parsing</button>
+    <button class="nav-btn" onclick="showTab('edge', this)">Edge Handling</button>
+    <button class="nav-btn" onclick="showTab('classify', this)">Classification</button>
+    <button class="nav-btn" onclick="showTab('context', this)">PRContext</button>
+    <button class="nav-btn" onclick="showTab('intake', this)">Intake</button>
+    <button class="nav-btn" onclick="showTab('priority', this)">File Priority</button>
+    <button class="nav-btn" onclick="showTab('evidence', this)">Evidence</button>
+    <button class="nav-btn" onclick="showTab('planner', this)">Task Planner</button>
+    <button class="nav-btn" onclick="showTab('routes', this)">Routes & Agents</button>
+    <button class="nav-btn" onclick="showTab('api', this)">API Endpoints</button>
+    <button class="nav-btn" onclick="showTab('flow', this)">Data Flow</button>
+  </div>
+
+  <!-- ============ INGEST ============ -->
+  <div class="section active" id="tab-ingest">
+    <h2 style="margin-bottom:16px;font-size:18px;">Stage 1: GitHub API Raw Data</h2>
+
+    <div class="struct-card" data-searchable>
+      <div class="struct-header" onclick="toggleStruct(this)">
+        <span class="struct-toggle">&#9654;</span>
+        <span class="struct-name">PRMetadata</span>
+        <span class="struct-badge">16 fields</span>
+        <span class="struct-file">fetcher.py</span>
+      </div>
+      <div class="struct-body">
+        <table>
+          <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+          <tr><td class="field-name">title</td><td class="type">str</td><td class="desc">PR title</td></tr>
+          <tr><td class="field-name">body</td><td class="type">str</td><td class="desc">PR description body</td></tr>
+          <tr><td class="field-name">author</td><td class="type">str</td><td class="desc">PR author username</td></tr>
+          <tr><td class="field-name">url</td><td class="type">str</td><td class="desc">PR GitHub URL</td></tr>
+          <tr><td class="field-name">state</td><td class="type">str</td><td class="desc">PR state: <code>open</code>, <code>closed</code></td></tr>
+          <tr><td class="field-name">merged</td><td class="type">bool</td><td class="desc">Whether PR is merged</td></tr>
+          <tr><td class="field-name">base_branch</td><td class="type">str</td><td class="desc">Target branch (e.g. <code>main</code>)</td></tr>
+          <tr><td class="field-name">head_branch</td><td class="type">str</td><td class="desc">Source branch (e.g. <code>feature/xxx</code>)</td></tr>
+          <tr><td class="field-name">created_at</td><td class="type">str</td><td class="desc">Creation time (ISO 8601)</td></tr>
+          <tr><td class="field-name">updated_at</td><td class="type">str</td><td class="desc">Last update time</td></tr>
+          <tr><td class="field-name">additions</td><td class="type">int</td><td class="desc">Total lines added</td></tr>
+          <tr><td class="field-name">deletions</td><td class="type">int</td><td class="desc">Total lines deleted</td></tr>
+          <tr><td class="field-name">changed_files</td><td class="type">int</td><td class="desc">Total changed files</td></tr>
+          <tr><td class="field-name">labels</td><td class="type">list[str]</td><td class="desc">PR labels</td></tr>
+          <tr><td class="field-name">assignees</td><td class="type">list[str]</td><td class="desc">Assigned users</td></tr>
+          <tr><td class="field-name">requested_reviewers</td><td class="type">list[str]</td><td class="desc">Requested reviewers</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="struct-card" data-searchable>
+      <div class="struct-header" onclick="toggleStruct(this)">
+        <span class="struct-toggle">&#9654;</span>
+        <span class="struct-name">CommitInfo</span>
+        <span class="struct-badge">4 fields</span>
+        <span class="struct-file">fetcher.py</span>
+      </div>
+      <div class="struct-body">
+        <table>
+          <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+          <tr><td class="field-name">sha</td><td class="type">str</td><td class="desc">Commit SHA hash</td></tr>
+          <tr><td class="field-name">message</td><td class="type">str</td><td class="desc">Commit message</td></tr>
+          <tr><td class="field-name">author</td><td class="type">str</td><td class="desc">Commit author</td></tr>
+          <tr><td class="field-name">date</td><td class="type">str</td><td class="desc">Commit date</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="struct-card" data-searchable>
+      <div class="struct-header" onclick="toggleStruct(this)">
+        <span class="struct-toggle">&#9654;</span>
+        <span class="struct-name">CommitsData</span>
+        <span class="struct-badge">2 fields</span>
+        <span class="struct-file">fetcher.py</span>
+      </div>
+      <div class="struct-body">
+        <table>
+          <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+          <tr><td class="field-name">head_sha</td><td class="type">str</td><td class="desc">HEAD commit SHA</td></tr>
+          <tr><td class="field-name">commits</td><td class="type">list[CommitInfo]</td><td class="desc">All commits in the PR</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="struct-card" data-searchable>
+      <div class="struct-header" onclick="toggleStruct(this)">
+        <span class="struct-toggle">&#9654;</span>
+        <span class="struct-name">ChangedFile</span>
+        <span class="struct-badge">10 fields</span>
+        <span class="struct-file">fetcher.py</span>
+      </div>
+      <div class="struct-body">
+        <table>
+          <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+          <tr><td class="field-name">filename</td><td class="type">str</td><td class="desc">File path</td></tr>
+          <tr><td class="field-name">previous_filename</td><td class="type">str | None</td><td class="desc">Path before rename (only for <code>renamed</code> status)</td></tr>
+          <tr><td class="field-name">status</td><td class="type">str</td><td class="desc">File status: <code>added</code>, <code>removed</code>, <code>modified</code>, <code>renamed</code></td></tr>
+          <tr><td class="field-name">additions</td><td class="type">int</td><td class="desc">Lines added in this file</td></tr>
+          <tr><td class="field-name">deletions</td><td class="type">int</td><td class="desc">Lines deleted in this file</td></tr>
+          <tr><td class="field-name">changes</td><td class="type">int</td><td class="desc">Total changed lines</td></tr>
+          <tr><td class="field-name">blob_url</td><td class="type">str</td><td class="desc">GitHub blob link</td></tr>
+          <tr><td class="field-name">raw_url</td><td class="type">str</td><td class="desc">Raw file link</td></tr>
+          <tr><td class="field-name">contents_url</td><td class="type">str</td><td class="desc">GitHub Contents API link</td></tr>
+          <tr><td class="field-name">patch</td><td class="type">str | None</td><td class="desc">Diff patch text (may be None for large files)</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ DIFF PARSING ============ -->
+  <div class="section" id="tab-diff">
+    <h2 style="margin-bottom:16px;font-size:18px;">Diff Parsing</h2>
+
+    <div class="struct-card" data-searchable>
+      <div class="struct-header" onclick="toggleStruct(this)">
+        <span class="struct-toggle">&#9654;</span>
+        <span class="struct-name">HunkLine</span>
+        <span class="struct-badge">4 fields</span>
+        <span class="struct-file">hunk_parser.py</span>
+      </div>
+      <div class="struct-body">
+        <table>
+          <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+          <tr><td class="field-name">type</td><td class="type">str</td><td class="desc">Line type: <code>"context"</code> (unchanged), <code>"added"</code>, <code>"removed"</code></td></tr>
+          <tr><td class="field-name">content</td><td class="type">str</td><td class="desc">Line content text</td></tr>
+          <tr><td class="field-name">old_line</td><td class="type">int | None</td><td class="desc">Original file line number (None for added lines)</td></tr>
+          <tr><td class="field-name">new_line</td><td class="type">int | None</td><td class="desc">New file line number (None for removed lines)</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="struct-card" data-searchable>
+      <div class="struct-header" onclick="toggleStruct(this)">
+        <span class="struct-toggle">&#9654;</span>
+        <span class="struct-name">Hunk</span>
+        <span class="struct-badge">6 fields</span>
+        <span class="struct-file">hunk_parser.py</span>
+      </div>
+      <div class="struct-body">
+        <table>
+          <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+          <tr><td class="field-name">header</td><td class="type">str</td><td class="desc">Hunk header (e.g. <code>@@ -10,5 +10,8 @@</code>)</td></tr>
+          <tr><td class="field-name">old_start</td><td class="type">int</td><td class="desc">Original file start line</td></tr>
+          <tr><td class="field-name">old_lines</td><td class="type">int</td><td class="desc">Original file line count</td></tr>
+          <tr><td class="field-name">new_start</td><td class="type">int</td><td class="desc">New file start line</td></tr>
+          <tr><td class="field-name">new_lines</td><td class="type">int</td><td class="desc">New file line count</td></tr>
+          <tr><td class="field-name">lines</td><td class="type">list[HunkLine]</td><td class="desc">All lines in this hunk</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ EDGE HANDLING ============ -->
+  <div class="section" id="tab-edge">
+    <h2 style="margin-bottom:16px;font-size:18px;">Edge Handling</h2>
+
+    <div class="struct-card" data-searchable>
+      <div class="struct-header" onclick="toggleStruct(this)">
+        <span class="struct-toggle">&#9654;</span>
+        <span class="struct-name">ProcessedFile</span>
+        <span class="struct-badge">14 fields</span>
+        <span class="struct-file">edge_handler.py</span>
+      </div>
+      <div class="struct-body">
+        <table>
+          <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+          <tr><td class="field-name">filename</td><td class="type">str</td><td class="desc">File path</td></tr>
+          <tr><td class="field-name">previous_filename</td><td class="type">str | None</td><td class="desc">Path before rename</td></tr>
+          <tr><td class="field-name">status</td><td class="type">str</td><td class="desc">File status</td></tr>
+          <tr><td class="field-name">additions</td><td class="type">int</td><td class="desc">Lines added</td></tr>
+          <tr><td class="field-name">deletions</td><td class="type">int</td><td class="desc">Lines deleted</td></tr>
+          <tr><td class="field-name">changes</td><td class="type">int</td><td class="desc">Total changed lines</td></tr>
+          <tr><td class="field-name">blob_url</td><td class="type">str</td><td class="desc">GitHub blob link</td></tr>
+          <tr><td class="field-name">raw_url</td><td class="type">str</td><td class="desc">Raw file link</td></tr>
+          <tr><td class="field-name">contents_url</td><td class="type">str</td><td class="desc">Contents API link</td></tr>
+          <tr><td class="field-name">is_binary</td><td class="type">bool</td><td class="desc">Whether file is binary</td></tr>
+          <tr><td class="field-name">patch_available</td><td class="type">bool</td><td class="desc">Whether patch data is available</td></tr>
+          <tr><td class="field-name">large_patch</td><td class="type">bool</td><td class="desc">Whether patch exceeds 50KB threshold</td></tr>
+          <tr><td class="field-name">parse_error</td><td class="type">str | None</td><td class="desc">Patch parse error (None if successful)</td></tr>
+          <tr><td class="field-name">hunks</td><td class="type">list[Hunk]</td><td class="desc">Parsed hunk list</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ CLASSIFICATION ============ -->
+  <div class="section" id="tab-classify">
+    <h2 style="margin-bottom:16px;font-size:18px;">Classification &amp; Scoring</h2>
+
+    <div class="struct-card" data-searchable>
+      <div class="struct-header" onclick="toggleStruct(this)">
+        <span class="struct-toggle">&#9654;</span>
+        <span class="struct-name">Classification</span>
+        <span class="struct-badge">10 fields</span>
+        <span class="struct-file">classifier.py</span>
+      </div>
+      <div class="struct-body">
+        <table>
+          <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+          <tr><td class="field-name">language</td><td class="type">str</td><td class="desc">Programming language (e.g. <code>python</code>, <code>javascript</code>)</td></tr>
+          <tr><td class="field-name">language_family</td><td class="type">str</td><td class="desc">Language family (e.g. <code>python</code>, <code>javascript</code>, <code>markup</code>)</td></tr>
+          <tr><td class="field-name">rule_profile</td><td class="type">str</td><td class="desc">Rule profile: <code>source</code>, <code>test</code>, <code>docs</code>, <code>config</code></td></tr>
+          <tr><td class="field-name">is_test</td><td class="type">bool</td><td class="desc">Is test file</td></tr>
+          <tr><td class="field-name">is_docs</td><td class="type">bool</td><td class="desc">Is documentation file</td></tr>
+          <tr><td class="field-name">is_config</td><td class="type">bool</td><td class="desc">Is configuration file</td></tr>
+          <tr><td class="field-name">is_source</td><td class="type">bool</td><td class="desc">Is source code file</td></tr>
+          <tr><td class="field-name">is_generated</td><td class="type">bool</td><td class="desc">Is auto-generated file</td></tr>
+          <tr><td class="field-name">is_high_risk_path</td><td class="type">bool</td><td class="desc">Is under a high-risk path</td></tr>
+          <tr><td class="field-name">risk_hints</td><td class="type">list[str]</td><td class="desc">Risk hint list (see below)</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="enum-card">
+      <div class="enum-title">risk_hints values</div>
+      <div class="enum-grid">
+        <div class="enum-item"><span class="enum-key">auth_path</span><span class="enum-desc">auth/login/oauth in path</span></div>
+        <div class="enum-item"><span class="enum-key">payment_path</span><span class="enum-desc">payment/billing/stripe in path</span></div>
+        <div class="enum-item"><span class="enum-key">config_path</span><span class="enum-desc">config/settings/env in path</span></div>
+        <div class="enum-item"><span class="enum-key">db_path</span><span class="enum-desc">db/database/migration in path</span></div>
+        <div class="enum-item"><span class="enum-key">no_test_pair</span><span class="enum-desc">source file has no matching test</span></div>
+      </div>
+    </div>
+
+    <div class="enum-card">
+      <div class="enum-title">Priority Score Formula</div>
+      <pre style="color:var(--text2);font-size:13px;font-family:monospace;">
+score = path_risk &times; 0.45 + change_size &times; 0.30 + file_status &times; 0.15 + lang_risk &times; 0.10
+Result: integer 0-100</pre>
+    </div>
+  </div>
+
+  <!-- ============ PRCONTEXT ============ -->
+  <div class="section" id="tab-context">
+    <h2 style="margin-bottom:16px;font-size:18px;">Final Context Structures</h2>
+
+    <div class="struct-card" data-searchable>
+      <div class="struct-header" onclick="toggleStruct(this)">
+        <span class="struct-toggle">&#9654;</span>
+        <span class="struct-name">FileEntry</span>
+        <span class="struct-badge">27 fields</span>
+        <span class="struct-file">context_manager.py</span>
+      </div>
+      <div class="struct-body">
+        <table>
+          <tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+          <tr><td class="field-name">filename</td><td class="type">str</td><td class="required">required</td><td class="desc">File path</td></tr>
+          <tr><td class="field-name">previous_filename</td><td class="type">str | None</td><td class="required">required</td><td class="desc">Path before rename</td></tr>
+          <tr><td class="field-name">status</td><td class="type">str</td><td class="required">required</td><td class="desc">File status: <code>added</code>, <code>removed</code>, <code>modified</code>, <code>renamed</code></td></tr>
+          <tr><td class="field-name">additions</td><td class="type">int</td><td class="required">required</td><td class="desc">Lines added</td></tr>
+          <tr><td class="field-name">deletions</td><td class="type">int</td><td class="required">required</td><td class="desc">Lines deleted</td></tr>
+          <tr><td class="field-name">changes</td><td class="type">int</td><td class="required">required</td><td class="desc">Total changed lines</td></tr>
+          <tr><td class="field-name">language</td><td class="type">str</td><td class="required">required</td><td class="desc">Programming language</td></tr>
+          <tr><td class="field-name">language_family</td><td class="type">str</td><td class="required">required</td><td class="desc">Language family</td></tr>
+          <tr><td class="field-name">rule_profile</td><td class="type">str</td><td class="required">required</td><td class="desc">Rule profile</td></tr>
+          <tr><td class="field-name">is_test</td><td class="type">bool</td><td class="required">required</td><td class="desc">Is test file</td></tr>
+          <tr><td class="field-name">is_docs</td><td class="type">bool</td><td class="required">required</td><td class="desc">Is docs file</td></tr>
+          <tr><td class="field-name">is_config</td><td class="type">bool</td><td class="required">required</td><td class="desc">Is config file</td></tr>
+          <tr><td class="field-name">is_source</td><td class="type">bool</td><td class="required">required</td><td class="desc">Is source code file</td></tr>
+          <tr><td class="field-name">is_generated</td><td class="type">bool</td><td class="required">required</td><td class="desc">Is auto-generated</td></tr>
+          <tr><td class="field-name">is_binary</td><td class="type">bool</td><td class="required">required</td><td class="desc">Is binary file</td></tr>
+          <tr><td class="field-name">patch_available</td><td class="type">bool</td><td class="required">required</td><td class="desc">Patch data available</td></tr>
+          <tr><td class="field-name">large_patch</td><td class="type">bool</td><td class="required">required</td><td class="desc">Patch is too large (&gt;50KB)</td></tr>
+          <tr><td class="field-name">parse_error</td><td class="type">str | None</td><td class="required">required</td><td class="desc">Parse error message</td></tr>
+          <tr><td class="field-name">is_high_risk_path</td><td class="type">bool</td><td class="required">required</td><td class="desc">Under high-risk path</td></tr>
+          <tr><td class="field-name">risk_hints</td><td class="type">list[str]</td><td class="default">[]</td><td class="desc">Risk hints</td></tr>
+          <tr><td class="field-name">priority_score_hint</td><td class="type">int</td><td class="default">0</td><td class="desc">Priority score (0-100)</td></tr>
+          <tr><td class="field-name">hunk_count</td><td class="type">int</td><td class="default">0</td><td class="desc">Number of hunks</td></tr>
+          <tr><td class="field-name">added_line_count</td><td class="type">int</td><td class="default">0</td><td class="desc">Lines added (parsed)</td></tr>
+          <tr><td class="field-name">removed_line_count</td><td class="type">int</td><td class="default">0</td><td class="desc">Lines removed (parsed)</td></tr>
+          <tr><td class="field-name">keywords</td><td class="type">list[str]</td><td class="default">[]</td><td class="desc">Keywords extracted from added lines</td></tr>
+          <tr><td class="field-name">hunks</td><td class="type">list[Hunk]</td><td class="default">[]</td><td class="desc">Parsed hunk list</td></tr>
+          <tr><td class="field-name">blob_url / raw_url / contents_url</td><td class="type">str</td><td class="default">""</td><td class="desc">GitHub URLs</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="struct-card" data-searchable>
+      <div class="struct-header" onclick="toggleStruct(this)">
+        <span class="struct-toggle">&#9654;</span>
+        <span class="struct-name">DerivedSignals</span>
+        <span class="struct-badge">6 fields</span>
+        <span class="struct-file">context_manager.py</span>
+      </div>
+      <div class="struct-body">
+        <table>
+          <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+          <tr><td class="field-name">total_hunks</td><td class="type">int</td><td class="desc">Total hunk count across all files</td></tr>
+          <tr><td class="field-name">source_files_changed</td><td class="type">int</td><td class="desc">Number of source files</td></tr>
+          <tr><td class="field-name">test_files_changed</td><td class="type">int</td><td class="desc">Number of test files</td></tr>
+          <tr><td class="field-name">docs_only</td><td class="type">bool</td><td class="desc">Only documentation changed</td></tr>
+          <tr><td class="field-name">has_source_without_tests</td><td class="type">bool</td><td class="desc">Source files changed without corresponding test changes</td></tr>
+          <tr><td class="field-name">high_risk_files</td><td class="type">list[str]</td><td class="desc">High-risk file paths</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="struct-card" data-searchable>
+      <div class="struct-header" onclick="toggleStruct(this)">
+        <span class="struct-toggle">&#9654;</span>
+        <span class="struct-name">PRContext</span>
+        <span class="struct-badge">11 fields</span>
+        <span class="struct-file">context_manager.py</span>
+      </div>
+      <div class="struct-body">
+        <table>
+          <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+          <tr><td class="field-name">context_id</td><td class="type">str</td><td class="desc">Unique ID: <code>ctx_{uuid_hex[:12]}</code></td></tr>
+          <tr><td class="field-name">source</td><td class="type">str</td><td class="desc">Data source: <code>"github"</code></td></tr>
+          <tr><td class="field-name">fetched_at</td><td class="type">str</td><td class="desc">Fetch time (ISO 8601)</td></tr>
+          <tr><td class="field-name">cache_key</td><td class="type">str</td><td class="desc">Cache key: <code>{owner}/{repo}/{pull_number}/{head_sha}</code></td></tr>
+          <tr><td class="field-name">owner</td><td class="type">str</td><td class="desc">Repository owner</td></tr>
+          <tr><td class="field-name">repo</td><td class="type">str</td><td class="desc">Repository name</td></tr>
+          <tr><td class="field-name">pull_number</td><td class="type">int</td><td class="desc">PR number</td></tr>
+          <tr><td class="field-name">pr</td><td class="type">PRMetadata</td><td class="desc">PR metadata</td></tr>
+          <tr><td class="field-name">commits</td><td class="type">CommitsData</td><td class="desc">Commit data</td></tr>
+          <tr><td class="field-name">files</td><td class="type">list[FileEntry]</td><td class="desc">All changed files</td></tr>
+          <tr><td class="field-name">derived</td><td class="type">DerivedSignals | None</td><td class="desc">Derived signals</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ INTAKE ============ -->
+  <div class="section" id="tab-intake">
+    <h2 style="margin-bottom:16px;font-size:18px;">Stage 2: Intake Summary</h2>
+    <p style="color:var(--text2);font-size:13px;margin-bottom:16px;"><code>POST /api/review/intake</code> response (plain dict, no dataclass)</p>
+
+    <div class="struct-card" data-searchable>
+      <div class="struct-header" onclick="toggleStruct(this)">
+        <span class="struct-toggle">&#9654;</span>
+        <span class="struct-name">Intake Summary Response</span>
+        <span class="struct-badge">dict</span>
+      </div>
+      <div class="struct-body">
+        <table>
+          <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+          <tr><td class="field-name">context_id</td><td class="type">str</td><td class="desc">Associated PRContext ID</td></tr>
+          <tr><td class="field-name">size</td><td class="type">str</td><td class="desc">PR size: <code>small</code> (&le;3 files, &le;100 lines), <code>medium</code> (&le;10, &le;500), <code>large</code></td></tr>
+          <tr><td class="field-name">change_type</td><td class="type">str</td><td class="desc">Change type: <code>docs</code>, <code>test</code>, <code>config</code>, <code>source</code>, <code>mixed</code></td></tr>
+          <tr><td class="field-name">docs_only</td><td class="type">bool</td><td class="desc">Only documentation changes</td></tr>
+          <tr><td class="field-name">source_without_tests</td><td class="type">bool</td><td class="desc">Source files without test coverage</td></tr>
+          <tr><td class="field-name">has_high_risk_paths</td><td class="type">bool</td><td class="desc">Contains high-risk path files</td></tr>
+          <tr><td class="field-name">language_distribution</td><td class="type">dict[str, int]</td><td class="desc">File count per language</td></tr>
+          <tr><td class="field-name">file_type_distribution</td><td class="type">dict[str, int]</td><td class="desc">File count per type</td></tr>
+          <tr><td class="field-name">top_directories</td><td class="type">list[dict]</td><td class="desc">Most changed directories (max 10), each with <code>directory</code> and <code>file_count</code></td></tr>
+          <tr><td class="field-name">notable_signals</td><td class="type">list[str]</td><td class="desc">Notable signals: <code>docs_only</code>, <code>source_without_tests</code>, <code>high_risk_paths_changed</code>, <code>large_pr</code></td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ FILE PRIORITY ============ -->
+  <div class="section" id="tab-priority">
+    <h2 style="margin-bottom:16px;font-size:18px;">Stage 2: File Priority View</h2>
+    <p style="color:var(--text2);font-size:13px;margin-bottom:16px;"><code>POST /api/review/file-priority</code> response</p>
+
+    <div class="enum-card">
+      <div class="enum-title">Priority Groups</div>
+      <div class="enum-grid">
+        <div class="enum-item"><span class="enum-key">must_review</span><span class="enum-val">&ge; 70</span><span class="enum-desc">Must review</span></div>
+        <div class="enum-item"><span class="enum-key">should_review</span><span class="enum-val">35-69</span><span class="enum-desc">Should review</span></div>
+        <div class="enum-item"><span class="enum-key">skim</span><span class="enum-val">&lt; 35</span><span class="enum-desc">Skim enough</span></div>
+      </div>
+    </div>
+
+    <div class="struct-card" data-searchable>
+      <div class="struct-header" onclick="toggleStruct(this)">
+        <span class="struct-toggle">&#9654;</span>
+        <span class="struct-name">File Priority Entry</span>
+        <span class="struct-badge">per file</span>
+      </div>
+      <div class="struct-body">
+        <table>
+          <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+          <tr><td class="field-name">filename</td><td class="type">str</td><td class="desc">File path</td></tr>
+          <tr><td class="field-name">status</td><td class="type">str</td><td class="desc">File status</td></tr>
+          <tr><td class="field-name">additions / deletions</td><td class="type">int</td><td class="desc">Lines added / deleted</td></tr>
+          <tr><td class="field-name">language / language_family</td><td class="type">str</td><td class="desc">Language info</td></tr>
+          <tr><td class="field-name">is_test / is_docs / is_config / is_source / is_binary / is_generated</td><td class="type">bool</td><td class="desc">File type flags</td></tr>
+          <tr><td class="field-name">patch_available / large_patch</td><td class="type">bool</td><td class="desc">Patch status</td></tr>
+          <tr><td class="field-name">hunk_count / added_line_count / removed_line_count</td><td class="type">int</td><td class="desc">Change statistics</td></tr>
+          <tr><td class="field-name">priority_score_hint</td><td class="type">int</td><td class="desc">Priority score (0-100)</td></tr>
+          <tr><td class="field-name">reasons</td><td class="type">list[str]</td><td class="desc">Why this file is flagged</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="enum-card">
+      <div class="enum-title">Possible reason values</div>
+      <div class="enum-grid">
+        <div class="enum-item"><span class="enum-key">auth_path</span></div>
+        <div class="enum-item"><span class="enum-key">payment_path</span></div>
+        <div class="enum-item"><span class="enum-key">config_path</span></div>
+        <div class="enum-item"><span class="enum-key">db_path</span></div>
+        <div class="enum-item"><span class="enum-key">no_test_pair</span></div>
+        <div class="enum-item"><span class="enum-key">high_risk_path</span></div>
+        <div class="enum-item"><span class="enum-key">source_change</span></div>
+        <div class="enum-item"><span class="enum-key">test_change</span></div>
+        <div class="enum-item"><span class="enum-key">docs_change</span></div>
+        <div class="enum-item"><span class="enum-key">config_change</span></div>
+        <div class="enum-item"><span class="enum-key">generated_file</span></div>
+        <div class="enum-item"><span class="enum-key">binary_file</span></div>
+        <div class="enum-item"><span class="enum-key">patch_unavailable</span></div>
+        <div class="enum-item"><span class="enum-key">large_patch</span></div>
+        <div class="enum-item"><span class="enum-key">parse_error</span></div>
+        <div class="enum-item"><span class="enum-key">new_file</span></div>
+        <div class="enum-item"><span class="enum-key">renamed_file</span></div>
+        <div class="enum-item"><span class="enum-key">removed_file</span></div>
+        <div class="enum-item"><span class="enum-key">large_change</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ EVIDENCE ============ -->
+  <div class="section" id="tab-evidence">
+    <h2 style="margin-bottom:16px;font-size:18px;">Stage 2: Evidence (Static Rule Analysis)</h2>
+
+    <div class="enum-card">
+      <div class="enum-title">Severity</div>
+      <div class="enum-grid">
+        <div class="enum-item"><span class="enum-key" style="color:var(--red)">CRITICAL</span><span class="enum-val">0</span><span class="enum-desc">Must fix</span></div>
+        <div class="enum-item"><span class="enum-key" style="color:var(--orange)">WARNING</span><span class="enum-val">1</span><span class="enum-desc">Should fix</span></div>
+        <div class="enum-item"><span class="enum-key" style="color:var(--accent)">INFO</span><span class="enum-val">2</span><span class="enum-desc">For reference</span></div>
+      </div>
+    </div>
+
+    <div class="struct-card" data-searchable>
+      <div class="struct-header" onclick="toggleStruct(this)">
+        <span class="struct-toggle">&#9654;</span>
+        <span class="struct-name">EvidenceItem</span>
+        <span class="struct-badge">12 fields</span>
+        <span class="struct-file">evidence.py</span>
+      </div>
+      <div class="struct-body">
+        <table>
+          <tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+          <tr><td class="field-name">id</td><td class="type">str</td><td class="required">required</td><td class="desc">Unique ID (SHA256 first 16 chars)</td></tr>
+          <tr><td class="field-name">source</td><td class="type">str</td><td class="required">required</td><td class="desc">Source: <code>"rule_analyzer_v1"</code></td></tr>
+          <tr><td class="field-name">rule_id</td><td class="type">str</td><td class="required">required</td><td class="desc">Rule ID (see table below)</td></tr>
+          <tr><td class="field-name">file</td><td class="type">str</td><td class="required">required</td><td class="desc">Associated file path (empty for PR-level)</td></tr>
+          <tr><td class="field-name">severity</td><td class="type">str</td><td class="required">required</td><td class="desc"><code>critical</code>, <code>warning</code>, <code>info</code></td></tr>
+          <tr><td class="field-name">category</td><td class="type">str</td><td class="required">required</td><td class="desc"><code>security</code>, <code>reliability</code>, <code>maintainability</code>, <code>test</code>, <code>config</code></td></tr>
+          <tr><td class="field-name">message</td><td class="type">str</td><td class="required">required</td><td class="desc">Human-readable description</td></tr>
+          <tr><td class="field-name">confidence</td><td class="type">float</td><td class="required">required</td><td class="desc">Confidence (0.0-1.0)</td></tr>
+          <tr><td class="field-name">tags</td><td class="type">list[str]</td><td class="default">[]</td><td class="desc">Tag list</td></tr>
+          <tr><td class="field-name">line</td><td class="type">int | None</td><td class="default">None</td><td class="desc">Line number (None for PR-level)</td></tr>
+          <tr><td class="field-name">hunk_index</td><td class="type">int | None</td><td class="default">None</td><td class="desc">Hunk index</td></tr>
+          <tr><td class="field-name">excerpt</td><td class="type">str | None</td><td class="default">None</td><td class="desc">Code snippet (sanitized)</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="enum-card">
+      <div class="enum-title">Rule IDs</div>
+      <table style="width:100%">
+        <tr><th>rule_id</th><th>category</th><th>severity</th><th>Description</th></tr>
+        <tr><td class="field-name">sensitive_field</td><td>security</td><td style="color:var(--red)">critical</td><td class="desc">Hardcoded secret or credential detected</td></tr>
+        <tr><td class="field-name">bare_except</td><td>reliability</td><td style="color:var(--orange)">warning</td><td class="desc">Python bare except clause</td></tr>
+        <tr><td class="field-name">dangerous_exec</td><td>security</td><td style="color:var(--orange)">warning</td><td class="desc">Dynamic code execution (eval/exec/os.system/subprocess)</td></tr>
+        <tr><td class="field-name">sql_injection</td><td>security</td><td style="color:var(--orange)">warning</td><td class="desc">SQL string construction injection risk</td></tr>
+        <tr><td class="field-name">high_risk_path</td><td>varies</td><td style="color:var(--orange)">warning</td><td class="desc">File in high-risk path</td></tr>
+        <tr><td class="field-name">patch_unavailable</td><td>maintainability</td><td style="color:var(--accent)">info</td><td class="desc">Patch not available</td></tr>
+        <tr><td class="field-name">large_patch</td><td>maintainability</td><td style="color:var(--accent)">info</td><td class="desc">Patch exceeds 50KB</td></tr>
+        <tr><td class="field-name">source_without_tests</td><td>test</td><td style="color:var(--orange)">warning</td><td class="desc">Source changed without test changes</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <!-- ============ TASK PLANNER ============ -->
+  <div class="section" id="tab-planner">
+    <h2 style="margin-bottom:16px;font-size:18px;">Stage 3: Context Task Planner</h2>
+
+    <div class="struct-card" data-searchable>
+      <div class="struct-header" onclick="toggleStruct(this)">
+        <span class="struct-toggle">&#9654;</span>
+        <span class="struct-name">ContextTask</span>
+        <span class="struct-badge">12 fields</span>
+        <span class="struct-file">context_task_planner.py</span>
+      </div>
+      <div class="struct-body">
+        <table>
+          <tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+          <tr><td class="field-name">task_id</td><td class="type">str</td><td class="required">required</td><td class="desc">Unique ID: <code>task_{sha256[:12]}</code></td></tr>
+          <tr><td class="field-name">task_type</td><td class="type">str</td><td class="required">required</td><td class="desc">Task type (7 types, see below)</td></tr>
+          <tr><td class="field-name">intent</td><td class="type">str</td><td class="required">required</td><td class="desc">Specific review intent</td></tr>
+          <tr><td class="field-name">route_key</td><td class="type">str</td><td class="required">required</td><td class="desc">Route key: <code>route:{task_type}</code></td></tr>
+          <tr><td class="field-name">source</td><td class="type">TaskSource</td><td class="required">required</td><td class="desc">What triggered this task</td></tr>
+          <tr><td class="field-name">target</td><td class="type">TaskTarget</td><td class="required">required</td><td class="desc">What to inspect</td></tr>
+          <tr><td class="field-name">queries</td><td class="type">list[str]</td><td class="required">required</td><td class="desc">Search queries for SubAgent</td></tr>
+          <tr><td class="field-name">priority</td><td class="type">str</td><td class="required">required</td><td class="desc"><code>critical</code>, <code>high</code>, <code>medium</code>, <code>low</code></td></tr>
+          <tr><td class="field-name">budget</td><td class="type">TaskBudget</td><td class="required">required</td><td class="desc">Execution budget limits</td></tr>
+          <tr><td class="field-name">expected_output</td><td class="type">str</td><td class="required">required</td><td class="desc">What output is expected</td></tr>
+          <tr><td class="field-name">fallback</td><td class="type">str</td><td class="required">required</td><td class="desc">What to do when context not found</td></tr>
+          <tr><td class="field-name">status</td><td class="type">str</td><td class="default">"pending"</td><td class="desc">Task status (always <code>pending</code> at planning time)</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="struct-card" data-searchable>
+      <div class="struct-header" onclick="toggleStruct(this)">
+        <span class="struct-toggle">&#9654;</span>
+        <span class="struct-name">TaskSource</span>
+        <span class="struct-badge">4 fields</span>
+      </div>
+      <div class="struct-body">
+        <table>
+          <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+          <tr><td class="field-name">evidence_ids</td><td class="type">list[str]</td><td class="desc">EvidenceItem IDs that triggered this task</td></tr>
+          <tr><td class="field-name">rule_ids</td><td class="type">list[str]</td><td class="desc">Related rule IDs</td></tr>
+          <tr><td class="field-name">signals</td><td class="type">list[str]</td><td class="desc">Related signals (e.g. <code>source_without_tests</code>, <code>db_path</code>)</td></tr>
+          <tr><td class="field-name">file_facts</td><td class="type">list[str]</td><td class="desc">Related file paths</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="struct-card" data-searchable>
+      <div class="struct-header" onclick="toggleStruct(this)">
+        <span class="struct-toggle">&#9654;</span>
+        <span class="struct-name">TaskTarget</span>
+        <span class="struct-badge">4 fields</span>
+      </div>
+      <div class="struct-body">
+        <table>
+          <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+          <tr><td class="field-name">files</td><td class="type">list[str]</td><td class="desc">Target file paths</td></tr>
+          <tr><td class="field-name">directories</td><td class="type">list[str]</td><td class="desc">Target directories</td></tr>
+          <tr><td class="field-name">symbols</td><td class="type">list[str]</td><td class="desc">Target symbols/class names (derived from filename)</td></tr>
+          <tr><td class="field-name">keywords</td><td class="type">list[str]</td><td class="desc">Search keywords</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="struct-card" data-searchable>
+      <div class="struct-header" onclick="toggleStruct(this)">
+        <span class="struct-toggle">&#9654;</span>
+        <span class="struct-name">TaskBudget</span>
+        <span class="struct-badge">3 fields</span>
+      </div>
+      <div class="struct-body">
+        <table>
+          <tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+          <tr><td class="field-name">max_searches</td><td class="type">int</td><td class="default">5</td><td class="desc">Max search operations</td></tr>
+          <tr><td class="field-name">max_files</td><td class="type">int</td><td class="default">10</td><td class="desc">Max files to read</td></tr>
+          <tr><td class="field-name">max_tokens</td><td class="type">int</td><td class="default">3000</td><td class="desc">Max token consumption</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="enum-card">
+      <div class="enum-title">Seven Task Types</div>
+      <table style="width:100%;font-size:13px;">
+        <tr><th>task_type</th><th>intent</th><th>Trigger</th></tr>
+        <tr><td class="field-name">test_context</td><td class="type">find_related_tests</td><td class="desc">Source without tests / no_test_pair signal</td></tr>
+        <tr><td class="field-name">reference_context</td><td class="type">find_references</td><td class="desc">Any source file changed</td></tr>
+        <tr><td class="field-name">security_context</td><td class="type">verify_security_evidence</td><td class="desc">Security evidence / auth_path / payment_path</td></tr>
+        <tr><td class="field-name">config_context</td><td class="type">inspect_config_impact</td><td class="desc">Config files / config_path hint</td></tr>
+        <tr><td class="field-name">config_context</td><td class="type">inspect_dependency_impact</td><td class="desc">Dependency files (package.json, etc.)</td></tr>
+        <tr><td class="field-name">data_context</td><td class="type">inspect_data_impact</td><td class="desc">db_path hint / DB files / SQL injection evidence</td></tr>
+        <tr><td class="field-name">runtime_context</td><td class="type">inspect_runtime_risk</td><td class="desc">bare_except / async/timeout/retry keywords</td></tr>
+        <tr><td class="field-name">patch_deep_dive</td><td class="type">inspect_patch_complexity</td><td class="desc">High-priority file (&ge;70) not covered by other tasks</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <!-- ============ ROUTES & AGENTS ============ -->
+  <div class="section" id="tab-routes">
+    <h2 style="margin-bottom:16px;font-size:18px;">Routes &amp; Agent Definitions</h2>
+
+    <div class="struct-card" data-searchable>
+      <div class="struct-header" onclick="toggleStruct(this)">
+        <span class="struct-toggle">&#9654;</span>
+        <span class="struct-name">TaskRoute</span>
+        <span class="struct-badge">6 fields</span>
+      </div>
+      <div class="struct-body">
+        <table>
+          <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+          <tr><td class="field-name">task_type</td><td class="type">str</td><td class="desc">Task type</td></tr>
+          <tr><td class="field-name">route_key</td><td class="type">str</td><td class="desc">Route key</td></tr>
+          <tr><td class="field-name">agent_type</td><td class="type">str</td><td class="desc">Agent type (e.g. <code>test-context-agent</code>)</td></tr>
+          <tr><td class="field-name">allowed_tools</td><td class="type">list[str]</td><td class="desc">Allowed tools (read-only)</td></tr>
+          <tr><td class="field-name">output_schema</td><td class="type">dict</td><td class="desc">Output JSON Schema</td></tr>
+          <tr><td class="field-name">max_steps</td><td class="type">int</td><td class="desc">Max execution steps (default 5)</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="struct-card" data-searchable>
+      <div class="struct-header" onclick="toggleStruct(this)">
+        <span class="struct-toggle">&#9654;</span>
+        <span class="struct-name">AgentDefinition</span>
+        <span class="struct-badge">4 fields</span>
+      </div>
+      <div class="struct-body">
+        <table>
+          <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+          <tr><td class="field-name">agent_type</td><td class="type">str</td><td class="desc">Agent type identifier</td></tr>
+          <tr><td class="field-name">description</td><td class="type">str</td><td class="desc">What this agent does</td></tr>
+          <tr><td class="field-name">allowed_tools</td><td class="type">list[str]</td><td class="desc">Allowed tools</td></tr>
+          <tr><td class="field-name">disallowed_tools</td><td class="type">list[str]</td><td class="desc">Forbidden tools (<code>task_tool</code>, <code>sub_agent</code>)</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="enum-card">
+      <div class="enum-title">Allowed Tools (all routes)</div>
+      <div class="enum-grid">
+        <div class="enum-item"><span class="enum-key">search_repo</span><span class="enum-desc">Search repository</span></div>
+        <div class="enum-item"><span class="enum-key">read_repo_file</span><span class="enum-desc">Read repo file</span></div>
+        <div class="enum-item"><span class="enum-key">read_file_patch</span><span class="enum-desc">Read file patch</span></div>
+        <div class="enum-item"><span class="enum-key">search_diff</span><span class="enum-desc">Search diff</span></div>
+        <div class="enum-item"><span class="enum-key">read_check_summary</span><span class="enum-desc">Read CI check summary</span></div>
+        <div class="enum-item"><span class="enum-key">read_review_comments_summary</span><span class="enum-desc">Read review comments</span></div>
+      </div>
+    </div>
+
+    <div class="enum-card">
+      <div class="enum-title">Seven Agent Types</div>
+      <table style="width:100%;font-size:13px;">
+        <tr><th>agent_type</th><th>Description</th></tr>
+        <tr><td class="field-name">test-context-agent</td><td class="desc">Finds related tests, test gaps, and coverage signals</td></tr>
+        <tr><td class="field-name">reference-context-agent</td><td class="desc">Finds references, callers, API usage, symbol impact</td></tr>
+        <tr><td class="field-name">security-context-agent</td><td class="desc">Inspects auth, secrets, SQL risk, input validation</td></tr>
+        <tr><td class="field-name">config-context-agent</td><td class="desc">Inspects config, env vars, dependencies, CI/checks</td></tr>
+        <tr><td class="field-name">data-context-agent</td><td class="desc">Inspects DB, schema, migration, cache, data access</td></tr>
+        <tr><td class="field-name">runtime-context-agent</td><td class="desc">Inspects exceptions, async, concurrency, timeouts, retries</td></tr>
+        <tr><td class="field-name">patch-deep-dive-agent</td><td class="desc">Deep inspection of high-priority or complex patches</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <!-- ============ API ENDPOINTS ============ -->
+  <div class="section" id="tab-api">
+    <h2 style="margin-bottom:16px;font-size:18px;">API Endpoints</h2>
+
+    <div class="struct-card">
+      <div class="struct-body open" style="display:block;">
+        <table>
+          <tr><th>Method</th><th>Path</th><th>Input</th><th>Output</th></tr>
+          <tr>
+            <td><span class="api-method api-post">POST</span></td>
+            <td class="field-name">/api/pr/context</td>
+            <td class="desc">{pr_url, github_token?}</td>
+            <td class="desc">Overview View (PRContext subset)</td>
+          </tr>
+          <tr>
+            <td><span class="api-method api-get">GET</span></td>
+            <td class="field-name">/api/pr/context/{id}/patch-index</td>
+            <td class="desc">&mdash;</td>
+            <td class="desc">Sorted file list</td>
+          </tr>
+          <tr>
+            <td><span class="api-method api-get">GET</span></td>
+            <td class="field-name">/api/pr/context/{id}/files/{filename}/patch</td>
+            <td class="desc">?hunk_index=&amp;max_lines=</td>
+            <td class="desc">Single file patch</td>
+          </tr>
+          <tr>
+            <td><span class="api-method api-post">POST</span></td>
+            <td class="field-name">/api/review/intake</td>
+            <td class="desc">{context_id}</td>
+            <td class="desc">Intake Summary</td>
+          </tr>
+          <tr>
+            <td><span class="api-method api-post">POST</span></td>
+            <td class="field-name">/api/review/file-priority</td>
+            <td class="desc">{context_id}</td>
+            <td class="desc">File Priority View</td>
+          </tr>
+          <tr>
+            <td><span class="api-method api-post">POST</span></td>
+            <td class="field-name">/api/review/evidence</td>
+            <td class="desc">{context_id}</td>
+            <td class="desc">Evidence Response</td>
+          </tr>
+          <tr>
+            <td><span class="api-method api-post">POST</span></td>
+            <td class="field-name">/api/review/context-tasks</td>
+            <td class="desc">{context_id}</td>
+            <td class="desc">TaskPlan</td>
+          </tr>
+          <tr>
+            <td><span class="api-method api-get">GET</span></td>
+            <td class="field-name">/api/health</td>
+            <td class="desc">&mdash;</td>
+            <td class="desc">{status: "ok"}</td>
+          </tr>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ DATA FLOW ============ -->
+  <div class="section" id="tab-flow">
+    <h2 style="margin-bottom:16px;font-size:18px;">Data Flow Diagram</h2>
+    <div class="flow">
+      <pre>
+                    ┌──────────────┐
+                    │  GitHub API  │
+                    └──────┬───────┘
+                           │
+                    ┌──────▼───────┐
+                    │   fetcher    │ PRMetadata, CommitsData, ChangedFile[]
+                    └──────┬───────┘
+                           │
+                    ┌──────▼───────┐
+                    │ edge_handler │ ProcessedFile[] (+ is_binary, hunks)
+                    └──────┬───────┘
+                           │
+                    ┌──────▼───────┐
+                    │  classifier  │ Classification (+ language, is_test, risk_hints)
+                    └──────┬───────┘
+                           │
+                    ┌──────▼───────┐
+                    │    scorer    │ priority_score_hint (0-100)
+                    └──────┬───────┘
+                           │
+                    ┌──────▼───────┐
+                    │   context    │ FileEntry[], DerivedSignals
+                    │   _manager   │
+                    └──────┬───────┘
+                           │
+                    ┌──────▼───────┐
+                    │ PRContext     │ ──→ _contexts[context_id] (in-memory)
+                    └──────┬───────┘
+                           │
+              ┌────────────┼────────────┐
+              │            │            │
+       ┌──────▼─────┐ ┌───▼────┐ ┌────▼─────┐
+       │   intake   │ │ file_  │ │ evidence │
+       │            │ │priority│ │          │
+       └──────┬─────┘ └───┬────┘ └────┬─────┘
+              │            │          │
+              ▼            ▼          ▼
+         summary      groups[]   EvidenceItem[]
+                                   │
+                                   ▼
+                          ┌────────────────┐
+                          │ context_task   │
+                          │   _planner     │
+                          └────────┬───────┘
+                                   │
+                          ┌────────▼───────┐
+                          │   TaskPlan     │
+                          │  ├─ tasks[]    │ ContextTask
+                          │  ├─ routes[]   │ TaskRoute
+                          │  ├─ agents[]   │ AgentDefinition
+                          │  └─ summary{}  │
+                          └────────────────┘</pre>
+    </div>
+  </div>
+
+</div>
+
+<script>
+function toggleStruct(header) {
+  const body = header.nextElementSibling;
+  const toggle = header.querySelector('.struct-toggle');
+  body.classList.toggle('open');
+  toggle.classList.toggle('open');
+}
+
+function showTab(name, btn) {
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  btn.classList.add('active');
+}
+
+function showStage(idx) {
+  const tabs = ['ingest', 'intake', 'planner'];
+  const btns = document.querySelectorAll('.nav-btn');
+  const tabName = tabs[idx];
+  btns.forEach(b => {
+    if (b.textContent.trim().toLowerCase().replace(/[^a-z]/g,'').includes(tabName.replace(/[^a-z]/g,''))) {
+      showTab(tabName, b);
+    }
+  });
+  document.querySelectorAll('.pipeline-stage').forEach((s,i) => {
+    s.classList.toggle('active', i === idx);
+  });
+}
+
+function filterAll(query) {
+  query = query.toLowerCase().trim();
+  document.querySelectorAll('.struct-card[data-searchable]').forEach(card => {
+    if (!query) {
+      card.style.display = '';
+      return;
+    }
+    const text = card.textContent.toLowerCase();
+    card.style.display = text.includes(query) ? '' : 'none';
+    if (text.includes(query)) {
+      const body = card.querySelector('.struct-body');
+      const toggle = card.querySelector('.struct-toggle');
+      if (body && !body.classList.contains('open')) {
+        body.classList.add('open');
+        toggle.classList.add('open');
+      }
+    }
+  });
+}
+</script>
+</body>
+</html>

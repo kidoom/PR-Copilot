@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from backend.agent_runtime.runtime.agent_def import AgentDefinition, AgentRegistry
-from backend.agent_runtime.runtime.sub_agent import SubAgentResult
-from backend.agent_runtime.tool.task import TaskTool, TaskToolError, DEFAULT_MAX_STEPS, ABSOLUTE_MAX_STEPS
+from backend.agent.runtime.agent_def import AgentDefinition, AgentRegistry
+from backend.agent.runtime.sub_agent import SubAgentResult
+from backend.agent.tools.task import TaskTool, TaskToolError, DEFAULT_MAX_STEPS, ABSOLUTE_MAX_STEPS
 
 
 async def fake_runner(*, prompt: str, agent_type: str, max_steps: int | None = None) -> SubAgentResult:

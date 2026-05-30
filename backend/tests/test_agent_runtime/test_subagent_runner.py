@@ -4,22 +4,22 @@ import json
 import pytest
 from typing import Any
 
-from backend.agent_runtime.model.messages import Message, ModelResponse, Role, TokenUsage, ToolUseBlock
-from backend.agent_runtime.model.client import ModelClient
-from backend.agent_runtime.runtime.agent_def import AgentDefinition, AgentRegistry, UnknownAgentError
-from backend.agent_runtime.runtime.loop import run_loop
-from backend.agent_runtime.runtime.results import AgentResult
-from backend.agent_runtime.runtime.sub_agent import SubAgentResult
-from backend.agent_runtime.runtime.subagent_runner import (
+from backend.agent.model.messages import Message, ModelResponse, Role, TokenUsage, ToolUseBlock
+from backend.agent.model.client import ModelClient
+from backend.agent.runtime.agent_def import AgentDefinition, AgentRegistry, UnknownAgentError
+from backend.agent.runtime.loop import run_loop
+from backend.agent.runtime.results import AgentResult
+from backend.agent.runtime.sub_agent import SubAgentResult
+from backend.agent.runtime.subagent_runner import (
     build_child_messages,
     build_child_tool_registry,
     build_subagent_runner,
     generate_child_session_id,
     run_subagent,
 )
-from backend.agent_runtime.tool.task import TaskTool, TaskToolError, ABSOLUTE_MAX_STEPS
-from backend.agent_runtime.tool.protocol import RiskLevel, Tool
-from backend.agent_runtime.tool.registry import ToolRegistry, DENIED_CHILD_TOOL_NAMES
+from backend.agent.tools.task import TaskTool, TaskToolError, ABSOLUTE_MAX_STEPS
+from backend.agent.tools.protocol import RiskLevel, Tool, ToolSchema
+from backend.agent.tools.registry import ToolRegistry, DENIED_CHILD_TOOL_NAMES
 
 
 # --- Fakes ---
@@ -31,7 +31,7 @@ class FakeModelClient(ModelClient):
         self._call_index = 0
         self.messages_log: list[list[Message]] = []
 
-    async def chat(self, messages: list[Message]) -> ModelResponse:
+    async def chat(self, messages: list[Message], tool_schemas: list[ToolSchema] | None = None) -> ModelResponse:
         self.messages_log.append(list(messages))
         if self._call_index < len(self._responses):
             resp = self._responses[self._call_index]
@@ -175,7 +175,7 @@ async def test_run_subagent_returns_max_steps_status():
     class AlwaysToolModel(ModelClient):
         def __init__(self) -> None:
             self.call_count = 0
-        async def chat(self, messages: list[Message]) -> ModelResponse:
+        async def chat(self, messages: list[Message], tool_schemas: list[ToolSchema] | None = None) -> ModelResponse:
             self.call_count += 1
             return ModelResponse(
                 content="thinking",
@@ -236,7 +236,7 @@ def test_build_child_messages_no_system():
 
 @pytest.mark.asyncio
 async def test_child_todo_write_does_not_mutate_parent():
-    from backend.agent_runtime.tool.repo_context.models import RepoContextSession, RepoVerificationState, VerificationStatus, TaskBudget
+    from backend.agent.tools.repo_context.models import RepoContextSession, RepoVerificationState, VerificationStatus, TaskBudget
 
     parent_session = RepoContextSession(
         context_id="ctx_parent", task_id="task_parent",
@@ -318,7 +318,7 @@ def test_child_tools_filtered_by_allowlist():
     for t in tools:
         registry.register(t)
 
-    from backend.agent_runtime.tool.registry import filter_tools
+    from backend.agent.tools.registry import filter_tools
     filtered = filter_tools(registry, agent_def)
     names = {t.name for t in filtered}
     assert "todo_write" in names
@@ -344,7 +344,7 @@ def test_recursive_delegation_tools_denied():
     for t in tools:
         registry.register(t)
 
-    from backend.agent_runtime.tool.registry import filter_tools
+    from backend.agent.tools.registry import filter_tools
     filtered = filter_tools(registry, agent_def)
     names = {t.name for t in filtered}
     for denied in DENIED_CHILD_TOOL_NAMES:
@@ -364,7 +364,7 @@ def test_disallowed_tools_removed():
     for t in tools:
         registry.register(t)
 
-    from backend.agent_runtime.tool.registry import filter_tools
+    from backend.agent.tools.registry import filter_tools
     filtered = filter_tools(registry, agent_def)
     names = {t.name for t in filtered}
     assert "todo_write" in names
