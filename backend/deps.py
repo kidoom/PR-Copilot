@@ -9,6 +9,8 @@ from backend.agent.model.config import ModelConfig
 from backend.agent.model.messages import Message, Role
 from backend.agent.model.openai_client import OpenAIModelClient
 from backend.agent.runtime.agent_def import AgentRegistry
+from backend.agent.runtime.memory.config import get_storage_dir
+from backend.agent.runtime.memory.store import FileMemoryStore
 from backend.agent.runtime.subagent_runner import build_subagent_runner
 from backend.agent.subagents import (
     ChildToolBundle,
@@ -50,6 +52,7 @@ class AgentDeps:
 
     model_config: ModelConfig
     subagent_registry: AgentRegistry
+    memory_store: FileMemoryStore = field(default_factory=lambda: FileMemoryStore(get_storage_dir()))
     main_agent_system_prompt: str = MAIN_AGENT_SYSTEM_PROMPT
 
     def new_model(self) -> ModelClient:
@@ -75,6 +78,7 @@ class AgentDeps:
         pr_context: Any,
         repo_root: str,
         parent_session_id: str | None = None,
+        run_id: str = "",
     ) -> MainAgentRuntime:
         child_bundles: dict[str, ChildToolBundle] = {}
         context_id = task_plan.get("context_id", "")
@@ -101,6 +105,9 @@ class AgentDeps:
             parent_session_id=parent_session_id or context_id or "main",
             agent_registry=self.subagent_registry,
             child_tool_factory=child_tool_factory,
+            memory_store=self.memory_store,
+            run_id=run_id,
+            context_id=context_id,
         )
         task_tool = TaskTool(
             runner=runner,
@@ -123,6 +130,7 @@ def create_agent_deps(*, model_prefix: str = "OPENAI") -> AgentDeps:
     return AgentDeps(
         model_config=ModelConfig.from_env(prefix=model_prefix),
         subagent_registry=build_default_subagent_registry(),
+        memory_store=FileMemoryStore(get_storage_dir()),
     )
 
 

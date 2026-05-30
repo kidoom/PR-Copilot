@@ -10,6 +10,14 @@ from backend.agent.runtime.events import (
     RunEvent,
 )
 from backend.agent.runtime.loop import run_loop
+from backend.agent.runtime.memory import (
+    AgentKind,
+    MemorySessionMeta,
+    append_event,
+    append_message,
+    build_main_session_id,
+)
+from backend.agent.runtime.memory.store import FileMemoryStore
 from backend.agent.runtime.run_manager import RunManager
 from backend.deps import AgentDeps
 
@@ -33,8 +41,26 @@ async def run_main_agent(
             event_sink(event)
         return event
 
+    # Create main memory session
+    memory_store: FileMemoryStore = deps.memory_store
+    session_id = build_main_session_id(run_id, context_id)
+    main_session = MemorySessionMeta(
+        session_id=session_id,
+        run_id=run_id,
+        agent_kind=AgentKind.MAIN,
+        agent_type="main-agent",
+        context_id=context_id,
+    )
+    memory_store.create_session(main_session)
+
     run_manager.mark_running(run_id)
     _emit(RUN_STARTED, {"context_id": context_id})
+
+    # Append run started event to memory
+    append_event(memory_store, session_id, {
+        "event_type": RUN_STARTED,
+        "context_id": context_id,
+    })
 
     try:
         model = deps.new_model()
@@ -45,7 +71,15 @@ async def run_main_agent(
             pr_context=pr_context,
             repo_root=repo_root,
             parent_session_id=parent_session_id or run_id,
+            run_id=run_id,
         )
+
+        # Append initial messages to memory
+        for msg in messages:
+            append_message(memory_store, session_id, {
+                "role": msg.role.value,
+                "content": msg.content if isinstance(msg.content, str) else str(msg.content),
+            })
 
         result = await run_loop(
             model=model,
@@ -53,6 +87,12 @@ async def run_main_agent(
             messages=messages,
             max_steps=max_steps,
         )
+
+        # Append assistant response to memory
+        append_message(memory_store, session_id, {
+            "role": "assistant",
+            "content": result.output,
+        })
 
         output_payload = {
             "output": result.output,
@@ -64,10 +104,24 @@ async def run_main_agent(
             },
         }
         run_manager.complete_run(run_id, result=output_payload)
+
+        # Append completion event to memory
+        append_event(memory_store, session_id, {
+            "event_type": RUN_COMPLETED,
+            "output": output_payload,
+        })
+
         return output_payload
 
     except Exception as exc:
         error_msg = f"{type(exc).__name__}: {exc}"
         tb = traceback.format_exc()
         run_manager.fail_run(run_id, error=error_msg)
+
+        # Append failure event to memory
+        append_event(memory_store, session_id, {
+            "event_type": RUN_FAILED,
+            "error": error_msg,
+        })
+
         return {"error": error_msg}
