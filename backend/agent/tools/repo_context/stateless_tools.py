@@ -79,6 +79,9 @@ class StatelessReadFilePatchTool(Tool):
     async def call(self, input: dict[str, Any]) -> str:
         filename = input["filename"]
 
+        if self._pr_context is None:
+            return json.dumps({"error": "PR context not available", "file": filename, "status": "unavailable"})
+
         for f in self._pr_context.files:
             if f.filename == filename:
                 if not f.patch_available:
@@ -119,6 +122,9 @@ class StatelessSearchDiffTool(Tool):
         limit = input.get("limit", 20)
         matches = []
         skipped = []
+
+        if self._pr_context is None:
+            return json.dumps({"matches": matches, "total": 0, "skipped_files": skipped, "truncated": False, "error": "PR context not available"})
 
         for f in self._pr_context.files:
             if not f.patch_available:
@@ -525,7 +531,7 @@ def create_stateless_context_tools(
     repo_root: str,
     pr_context: Any,
 ) -> list[Tool]:
-    """Create stateless repo context tools.
+    """Create stateless repo context tools using direct filesystem access.
 
     Args:
         repo_root: Path to the repository root. Must be a valid directory.
@@ -553,5 +559,186 @@ def create_stateless_context_tools(
         StatelessReadRepoFileTool(repo_root),
         StatelessSearchTestsForTool(repo_root),
         StatelessReadRepoManifestTool(repo_root),
+        StatelessReadCheckSummaryTool(),
+    ]
+
+
+# --- Provider-backed tool implementations ---
+
+class ProviderSearchRepoTool(Tool):
+    """Search repository content via RepoProvider."""
+
+    def __init__(self, provider: Any) -> None:
+        self._provider = provider
+
+    @property
+    def name(self) -> str: return "search_repo"
+    @property
+    def description(self) -> str: return "Search repository content by keyword"
+    @property
+    def input_schema(self) -> dict[str, Any]:
+        return {"type": "object", "properties": {"query": {"type": "string"}, "path_scope": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["query"]}
+    @property
+    def risk_level(self) -> RiskLevel: return RiskLevel.LOW
+    @property
+    def is_read_only(self) -> bool: return True
+    @property
+    def is_concurrency_safe(self) -> bool: return True
+
+    async def call(self, input: dict[str, Any]) -> str:
+        query = input["query"]
+        path_scope = input.get("path_scope", "")
+        limit = max(1, min(input.get("limit", 20), MAX_SEARCH_RESULTS))
+        globs = [f"{path_scope}/**"] if path_scope else None
+        result = await self._provider.search_code(query, globs=globs, max_results=limit)
+        if result.error:
+            return json.dumps({"error": result.error, "matches": [], "total": 0, "truncated": result.truncated})
+        return json.dumps({
+            "matches": [{"file": m.file, "line": m.line, "snippet": m.snippet} for m in result.matches],
+            "total": len(result.matches),
+            "truncated": result.truncated,
+        })
+
+
+class ProviderReadRepoFileTool(Tool):
+    """Read a bounded snippet via RepoProvider."""
+
+    def __init__(self, provider: Any) -> None:
+        self._provider = provider
+
+    @property
+    def name(self) -> str: return "read_repo_file"
+    @property
+    def description(self) -> str: return "Read a bounded snippet from a repository file"
+    @property
+    def input_schema(self) -> dict[str, Any]:
+        return {"type": "object", "properties": {"path": {"type": "string"}, "start_line": {"type": "integer"}, "max_lines": {"type": "integer"}}, "required": ["path"]}
+    @property
+    def risk_level(self) -> RiskLevel: return RiskLevel.LOW
+    @property
+    def is_read_only(self) -> bool: return True
+    @property
+    def is_concurrency_safe(self) -> bool: return True
+
+    async def call(self, input: dict[str, Any]) -> str:
+        path = input["path"]
+        start_line = input.get("start_line", 1)
+        max_lines = max(1, min(input.get("max_lines", 50), MAX_LINES))
+        end_line = start_line + max_lines - 1
+        result = await self._provider.read_file(path, start_line=start_line, end_line=end_line)
+        if result.error:
+            return json.dumps({"error": result.error, "path": path})
+        return json.dumps({
+            "path": path,
+            "start_line": start_line,
+            "end_line": result.lines[-1]["line"] if result.lines else start_line,
+            "lines": result.lines,
+            "truncated": result.truncated,
+        })
+
+
+class ProviderSearchTestsForTool(Tool):
+    """Find candidate test files via RepoProvider."""
+
+    def __init__(self, provider: Any) -> None:
+        self._provider = provider
+
+    @property
+    def name(self) -> str: return "search_tests_for"
+    @property
+    def description(self) -> str: return "Find candidate test files related to a source file"
+    @property
+    def input_schema(self) -> dict[str, Any]:
+        return {"type": "object", "properties": {"source_file": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["source_file"]}
+    @property
+    def risk_level(self) -> RiskLevel: return RiskLevel.LOW
+    @property
+    def is_read_only(self) -> bool: return True
+    @property
+    def is_concurrency_safe(self) -> bool: return True
+
+    async def call(self, input: dict[str, Any]) -> str:
+        source_file = input["source_file"]
+        limit = max(1, min(input.get("limit", 20), MAX_SEARCH_RESULTS))
+        basename = os.path.basename(source_file)
+        name_no_ext = os.path.splitext(basename)[0]
+        patterns = [
+            f"test_{name_no_ext}*",
+            f"{name_no_ext}_test*",
+            f"test-{name_no_ext}*",
+            f"{name_no_ext}.test.*",
+            f"{name_no_ext}.spec.*",
+        ]
+        result = await self._provider.list_files(globs=patterns, max_results=limit)
+        if result.error:
+            return json.dumps({"error": result.error, "candidates": [], "total": 0, "status": "error"})
+        candidates = [{"file": e.path, "reason": "Matches test pattern"} for e in result.entries]
+        status = "found" if candidates else "inconclusive"
+        return json.dumps({"candidates": candidates, "total": len(candidates), "status": status})
+
+
+class ProviderReadRepoManifestTool(Tool):
+    """Read manifest files via RepoProvider."""
+
+    def __init__(self, provider: Any) -> None:
+        self._provider = provider
+
+    @property
+    def name(self) -> str: return "read_repo_manifest"
+    @property
+    def description(self) -> str: return "Read README, dependencies, CODEOWNERS, CI, and rule files"
+    @property
+    def input_schema(self) -> dict[str, Any]:
+        return {"type": "object", "properties": {}}
+    @property
+    def risk_level(self) -> RiskLevel: return RiskLevel.LOW
+    @property
+    def is_read_only(self) -> bool: return True
+    @property
+    def is_concurrency_safe(self) -> bool: return True
+
+    async def call(self, input: dict[str, Any]) -> str:
+        result = await self._provider.get_manifest()
+        manifests: dict[str, Any] = {}
+        for category, entries in result.manifests.items():
+            found = []
+            for e in entries:
+                entry: dict[str, Any] = {"path": e.path}
+                if e.is_directory:
+                    entry["entries"] = e.entries or []
+                    entry["is_directory"] = True
+                else:
+                    entry["content"] = e.content
+                    entry["truncated"] = e.truncated
+                found.append(entry)
+            manifests[category] = found
+        return json.dumps({"manifests": manifests})
+
+
+def create_provider_backed_context_tools(
+    provider: Any,
+    pr_context: Any,
+) -> list[Tool]:
+    """Create stateless repo context tools backed by a RepoProvider.
+
+    All repo filesystem operations go through the provider's safe interface.
+    PR-context tools (diff/patch) remain unchanged.
+
+    Args:
+        provider: A RepoProvider instance for safe repo access.
+        pr_context: PR context for diff/patch operations.
+
+    Returns:
+        List of stateless tools.
+    """
+    return [
+        StatelessTodoWriteTool(),
+        StatelessVerifyRepoContextTool(provider.repo_root, pr_context),
+        StatelessReadFilePatchTool(pr_context),
+        StatelessSearchDiffTool(pr_context),
+        ProviderSearchRepoTool(provider),
+        ProviderReadRepoFileTool(provider),
+        ProviderSearchTestsForTool(provider),
+        ProviderReadRepoManifestTool(provider),
         StatelessReadCheckSummaryTool(),
     ]

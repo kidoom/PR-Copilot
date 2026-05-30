@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.agent.runtime.main_runner import run_main_agent
+from backend.agent.tools.repo_context.provider.models import PRIdentity
 from backend.agent.runtime.run_manager import RunManager, RunNotFoundError
 from backend.deps import get_agent_deps
 from backend.domain.pr_context.context_manager import get_context
@@ -24,6 +26,7 @@ def get_run_manager() -> RunManager:
 
 class CreateRunRequest(BaseModel):
     context_id: str
+    local_repo_root: str | None = None
 
 
 @router.post("")
@@ -37,19 +40,31 @@ async def create_run(req: CreateRunRequest):
 
     run = _run_manager.create_run(req.context_id)
 
-    asyncio.create_task(_execute_run(run.run_id, req.context_id, task_plan))
+    asyncio.create_task(_execute_run(run.run_id, req.context_id, task_plan, req.local_repo_root))
 
     return {"run_id": run.run_id, "status": run.status.value}
 
 
-async def _execute_run(run_id: str, context_id: str, task_plan: dict[str, Any]) -> None:
+async def _execute_run(
+    run_id: str,
+    context_id: str,
+    task_plan: dict[str, Any],
+    local_repo_root: str | None = None,
+) -> None:
     ctx = get_context(context_id)
-    repo_root = ""
     pr_context = ctx
-    if ctx is not None:
-        repo_root = f"{ctx.owner}/{ctx.repo}"
-
     deps = get_agent_deps()
+
+    repo_root = local_repo_root or os.environ.get("PR_COPILOT_LOCAL_REPO_ROOT", "")
+    pr_identity = None
+    if ctx is not None:
+        pr_identity = PRIdentity(
+            owner=ctx.owner,
+            repo=ctx.repo,
+            pull_number=ctx.pull_number,
+            head_sha=ctx.commits.head_sha,
+            base_ref=ctx.pr.base_branch,
+        )
 
     await run_main_agent(
         run_id=run_id,
@@ -59,6 +74,9 @@ async def _execute_run(run_id: str, context_id: str, task_plan: dict[str, Any]) 
         repo_root=repo_root,
         deps=deps,
         run_manager=_run_manager,
+        workspace_manager=deps.workspace_manager,
+        pr_identity=pr_identity,
+        token=os.environ.get("PR_COPILOT_GITHUB_TOKEN") or os.environ.get("GITHUB_TOKEN"),
     )
 
 

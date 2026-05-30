@@ -224,12 +224,14 @@ def build_context_child_tools(
     from pathlib import Path
 
     if provider is not None:
+        from backend.agent.tools.repo_context.stateless_tools import create_provider_backed_context_tools
+
         session = RepoContextSession(
             context_id=context_id or child_session_id,
             task_id=(task or {}).get("task_id", child_session_id),
             repo_root=provider.repo_root,
         )
-        tools = create_stateless_context_tools(provider.repo_root, pr_context)
+        tools = create_provider_backed_context_tools(provider, pr_context)
         return ChildToolBundle(session=session, tools=tools)
 
     if not repo_root:

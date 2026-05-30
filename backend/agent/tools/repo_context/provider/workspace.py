@@ -266,9 +266,11 @@ class RepoWorkspaceManager:
         if not self._temp_root:
             logger.warning("Cannot delete %s: no temp_root configured", path)
             return
-        resolved = str(Path(path).resolve())
-        temp_resolved = str(Path(self._temp_root).resolve())
-        if not resolved.startswith(temp_resolved):
+        resolved = Path(path).resolve()
+        temp_resolved = Path(self._temp_root).resolve()
+        try:
+            resolved.relative_to(temp_resolved)
+        except ValueError:
             logger.warning("Refusing to delete %s: outside temp root %s", path, self._temp_root)
             return
-        _cleanup_dir(resolved)
+        _cleanup_dir(str(resolved))
