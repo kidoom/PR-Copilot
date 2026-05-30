@@ -3,7 +3,6 @@ from backend.agent_runtime.runtime.results import AgentResult, ToolExecutionResu
 from backend.agent_runtime.runtime.agent_def import AgentDefinition, AgentRegistry, UnknownAgentError
 from backend.agent_runtime.runtime.loop import run_loop
 from backend.agent_runtime.runtime.sub_agent import SubAgentResult
-from backend.agent_runtime.runtime.task_tool import TaskTool, TaskToolError
 from backend.agent_runtime.runtime.subagent_runner import (
     build_child_messages,
     build_child_tool_registry,
@@ -22,8 +21,6 @@ __all__ = [
     "ObserveStep",
     "StepKind",
     "SubAgentResult",
-    "TaskTool",
-    "TaskToolError",
     "ThinkStep",
     "ToolExecutionResult",
     "UnknownAgentError",

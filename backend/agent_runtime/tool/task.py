@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 from typing import Any, Callable, Awaitable
 
-from backend.agent_runtime.runtime.agent_def import AgentDefinition, AgentRegistry, UnknownAgentError
+from backend.agent_runtime.runtime.agent_def import AgentRegistry
 from backend.agent_runtime.runtime.sub_agent import SubAgentResult
 from backend.agent_runtime.tool.protocol import RiskLevel
 
-Runner = Callable[[AgentDefinition, str, int], Awaitable[SubAgentResult]]
+Runner = Callable[..., Awaitable[SubAgentResult]]
 
 DEFAULT_MAX_STEPS = 10
 ABSOLUTE_MAX_STEPS = 50
@@ -20,11 +20,14 @@ class TaskToolError(Exception):
 class TaskTool:
     def __init__(
         self,
-        agent_registry: AgentRegistry,
         runner: Runner,
+        agent_registry: AgentRegistry | None = None,
+        agent_types: list[str] | None = None,
     ) -> None:
-        self._agent_registry = agent_registry
         self._runner = runner
+        self._agent_types = agent_types or (agent_registry.names() if agent_registry is not None else ["default"])
+        if not self._agent_types:
+            self._agent_types = ["default"]
 
     @property
     def name(self) -> str:
@@ -32,7 +35,12 @@ class TaskTool:
 
     @property
     def description(self) -> str:
-        return "Delegate a bounded task to a named subagent"
+        roles = ", ".join(self._agent_types)
+        return (
+            "Delegate a bounded task to an isolated subagent. The prompt or task "
+            "must be self-contained because the subagent starts with fresh context. "
+            f"Available agent_type roles: {roles}."
+        )
 
     @property
     def input_schema(self) -> dict[str, Any]:
@@ -40,7 +48,11 @@ class TaskTool:
             "type": "object",
             "properties": {
                 "prompt": {"type": "string", "description": "Self-contained prompt for the subagent"},
-                "agent_type": {"type": "string", "description": "Name of the agent type to delegate to"},
+                "agent_type": {
+                    "type": "string",
+                    "enum": list(self._agent_types),
+                    "description": f"Name of the agent type to delegate to (default: {self._agent_types[0]})",
+                },
                 "max_steps": {"type": "integer", "description": "Maximum steps for the subagent (clamped to 1-50)"},
                 "task": {"type": "object", "description": "Task payload with queries/intent/target as alternative to prompt"},
             },
@@ -60,7 +72,7 @@ class TaskTool:
 
     async def call(self, input: dict[str, Any]) -> str:
         prompt = input.get("prompt")
-        agent_type = input.get("agent_type", "default")
+        agent_type = input.get("agent_type") or self._agent_types[0]
         max_steps = input.get("max_steps")
         task = input.get("task")
 
@@ -80,15 +92,13 @@ class TaskTool:
             })
         except TaskToolError as e:
             return json.dumps({"error": str(e)})
-        except UnknownAgentError as e:
-            return json.dumps({"error": str(e), "available": e.available})
 
     async def run(
         self,
         *,
         prompt: str | None = None,
         task: dict[str, Any] | None = None,
-        agent_type: str = "default",
+        agent_type: str | None = None,
         max_steps: int | None = None,
     ) -> SubAgentResult:
         effective_prompt = prompt
@@ -102,12 +112,20 @@ class TaskTool:
         if not effective_prompt or not effective_prompt.strip():
             raise TaskToolError("TaskTool requires a non-empty prompt or task payload.")
 
-        agent_def = self._agent_registry.resolve(agent_type)
+        effective_agent_type = agent_type or self._agent_types[0]
+        if effective_agent_type not in self._agent_types:
+            available = ", ".join(sorted(self._agent_types))
+            raise TaskToolError(f"Unknown agent type '{effective_agent_type}'. Available agent types: {available}")
 
-        steps = max_steps if max_steps is not None else agent_def.default_max_steps
-        steps = max(1, min(steps, ABSOLUTE_MAX_STEPS))
+        steps = None
+        if max_steps is not None:
+            steps = max(1, min(int(max_steps), ABSOLUTE_MAX_STEPS))
 
-        return await self._runner(agent_def, effective_prompt, steps)
+        return await self._runner(
+            prompt=effective_prompt,
+            agent_type=effective_agent_type,
+            max_steps=steps,
+        )
 
 
 def _build_prompt_from_queries(task: dict[str, Any]) -> str | None:
