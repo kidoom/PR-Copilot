@@ -3,6 +3,7 @@ from __future__ import annotations
 import traceback
 from typing import Any, Callable
 
+from backend.agent.model.messages import Message
 from backend.agent.runtime.events import (
     RUN_COMPLETED,
     RUN_FAILED,
@@ -20,6 +21,34 @@ from backend.agent.runtime.memory import (
 from backend.agent.runtime.memory.store import FileMemoryStore
 from backend.agent.runtime.run_manager import RunManager
 from backend.deps import AgentDeps
+
+
+def _message_to_payload(msg: Message) -> dict[str, Any]:
+    """Convert a Message to a serializable payload."""
+    content = msg.content
+    if isinstance(content, list):
+        # ToolUseBlock or ToolResultBlock
+        blocks = []
+        for block in content:
+            if hasattr(block, "tool_use_id") and hasattr(block, "name"):
+                # ToolUseBlock
+                blocks.append({
+                    "tool_use_id": block.tool_use_id,
+                    "name": block.name,
+                    "input": block.input,
+                })
+            elif hasattr(block, "tool_use_id"):
+                # ToolResultBlock
+                blocks.append({
+                    "tool_use_id": block.tool_use_id,
+                    "content": block.content,
+                    "is_error": block.is_error,
+                })
+        content = blocks
+    return {
+        "role": msg.role.value,
+        "content": content,
+    }
 
 
 async def run_main_agent(
@@ -76,23 +105,19 @@ async def run_main_agent(
 
         # Append initial messages to memory
         for msg in messages:
-            append_message(memory_store, session_id, {
-                "role": msg.role.value,
-                "content": msg.content if isinstance(msg.content, str) else str(msg.content),
-            })
+            append_message(memory_store, session_id, _message_to_payload(msg))
+
+        # Define callback to persist each message during run_loop
+        def on_message(msg: Message) -> None:
+            append_message(memory_store, session_id, _message_to_payload(msg))
 
         result = await run_loop(
             model=model,
             tool_registry=runtime.tool_registry,
             messages=messages,
             max_steps=max_steps,
+            on_message=on_message,
         )
-
-        # Append assistant response to memory
-        append_message(memory_store, session_id, {
-            "role": "assistant",
-            "content": result.output,
-        })
 
         output_payload = {
             "output": result.output,

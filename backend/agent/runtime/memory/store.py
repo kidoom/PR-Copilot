@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ from backend.agent.runtime.memory.models import (
     MemorySessionMeta,
     TranscriptEntry,
 )
+from backend.agent.runtime.memory.session_id import validate_session_id
 
 
 class MemoryStoreError(Exception):
@@ -32,6 +34,30 @@ class InvalidSessionError(MemoryStoreError):
 
 class AppendToUnknownSessionError(MemoryStoreError):
     """Raised when trying to append to a non-existent session."""
+
+
+def _normalize_agent_type(agent_type: str) -> str:
+    """Normalize agent_type for safe use in filesystem paths.
+
+    - Lowercase
+    - Replace non-alphanumeric chars (except hyphen) with hyphen
+    - Collapse multiple hyphens
+    - Strip leading/trailing hyphens
+    """
+    normalized = re.sub(r"[^a-z0-9-]", "-", agent_type.lower())
+    normalized = re.sub(r"-+", "-", normalized)
+    return normalized.strip("-")
+
+
+def _validate_path_is_under(path: Path, parent: Path) -> bool:
+    """Check that resolved path is under parent directory."""
+    try:
+        resolved = path.resolve()
+        parent_resolved = parent.resolve()
+        resolved.relative_to(parent_resolved)
+        return True
+    except ValueError:
+        return False
 
 
 class FileMemoryStore:
@@ -61,7 +87,8 @@ class FileMemoryStore:
 
     def _subagent_session_dir(self, agent_type: str, session_id: str) -> Path:
         """Get directory for a subagent session."""
-        return self._memory_dir / "subagents" / agent_type / session_id
+        normalized_type = _normalize_agent_type(agent_type)
+        return self._memory_dir / "subagents" / normalized_type / session_id
 
     def _session_dir(self, meta: MemorySessionMeta) -> Path:
         """Get directory for a session based on its metadata."""
@@ -82,25 +109,50 @@ class FileMemoryStore:
         """Create a new memory session.
 
         Raises:
-            SessionAlreadyExistsError: If session already exists.
+            SessionAlreadyExistsError: If session already exists (in memory or on disk).
             InvalidSessionError: If session metadata is invalid.
         """
+        # Validate session_id is filesystem-safe
         if not meta.session_id:
             raise InvalidSessionError("session_id is required")
 
+        if not validate_session_id(meta.session_id):
+            raise InvalidSessionError(
+                f"session_id contains invalid characters: {meta.session_id}"
+            )
+
+        # Validate agent_type
+        if not meta.agent_type:
+            raise InvalidSessionError("agent_type is required")
+
+        # Check memory cache
         if meta.session_id in self._sessions:
             raise SessionAlreadyExistsError(f"Session {meta.session_id} already exists")
 
-        # Create session directory
+        # Compute session directory and verify path safety
         session_dir = self._session_dir(meta)
-        session_dir.mkdir(parents=True, exist_ok=True)
+
+        # P0: Verify resolved path is under memory_dir
+        if not _validate_path_is_under(session_dir, self._memory_dir):
+            raise InvalidSessionError(
+                f"Session path escapes memory directory: {session_dir}"
+            )
+
+        # P1: Check if session already exists on disk
+        state_file = session_dir / "state.json"
+        transcript_file = session_dir / "transcript.jsonl"
+        if session_dir.exists() and (state_file.exists() or transcript_file.exists()):
+            raise SessionAlreadyExistsError(
+                f"Session {meta.session_id} already exists on disk at {session_dir}"
+            )
+
+        # Create session directory (without exist_ok to avoid race conditions)
+        session_dir.mkdir(parents=True, exist_ok=False)
 
         # Write state.json
-        state_file = self._state_file(meta)
         state_file.write_text(json.dumps(meta.to_dict(), indent=2), encoding="utf-8")
 
         # Create empty transcript.jsonl
-        transcript_file = self._transcript_file(meta)
         transcript_file.touch()
 
         # Cache session

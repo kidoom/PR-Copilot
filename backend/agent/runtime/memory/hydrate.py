@@ -38,9 +38,9 @@ def hydrate_messages(
             if msg:
                 messages.append(msg)
         elif entry.type == EntryType.SUMMARY:
-            # Apply summary boundary
-            msg = _apply_summary_boundary(entry, messages)
-            messages = [msg] if msg else []
+            # Apply summary boundary - replaces older messages
+            boundary_messages = _apply_summary_boundary(entry, messages)
+            messages = boundary_messages
         # Ignore other entry types (agent_event, session_meta, todo_state, evidence_package)
 
     # Repair tool pairs
@@ -94,23 +94,76 @@ def _entry_to_message(entry: TranscriptEntry) -> Message | None:
 def _apply_summary_boundary(
     entry: TranscriptEntry,
     previous_messages: list[Message],
-) -> Message | None:
+) -> list[Message]:
     """Apply a summary boundary, replacing older messages.
 
     The summary payload should contain:
     - summary_text: The summary content
     - recent_messages: Optional list of recent messages to preserve
+
+    Returns:
+        List of messages: [summary_message, *recent_messages]
     """
     payload = entry.payload
     if not payload:
-        return None
+        return []
 
     summary_text = payload.get("summary_text", "")
     if not summary_text:
+        return []
+
+    # Create summary message
+    summary_msg = Message(role=Role.USER, content=f"[Summary]\n{summary_text}")
+
+    # Parse recent_messages if present
+    recent_messages: list[Message] = []
+    raw_recent = payload.get("recent_messages", [])
+    if isinstance(raw_recent, list):
+        for raw_msg in raw_recent:
+            msg = _raw_message_to_message(raw_msg)
+            if msg:
+                recent_messages.append(msg)
+
+    return [summary_msg] + recent_messages
+
+
+def _raw_message_to_message(raw: dict[str, Any]) -> Message | None:
+    """Convert a raw dict (from payload) to a Message."""
+    if not isinstance(raw, dict):
         return None
 
-    # Return summary as a user message
-    return Message(role=Role.USER, content=summary_text)
+    role_str = raw.get("role", "")
+    try:
+        role = Role(role_str)
+    except ValueError:
+        return None
+
+    content = raw.get("content", "")
+
+    # Handle structured content
+    if isinstance(content, list):
+        blocks = []
+        for block in content:
+            if isinstance(block, dict):
+                if "tool_use_id" in block and "name" in block:
+                    blocks.append(
+                        ToolUseBlock(
+                            tool_use_id=block["tool_use_id"],
+                            name=block["name"],
+                            input=block.get("input", {}),
+                        )
+                    )
+                elif "tool_use_id" in block:
+                    blocks.append(
+                        ToolResultBlock(
+                            tool_use_id=block["tool_use_id"],
+                            content=block.get("content", ""),
+                            is_error=block.get("is_error", False),
+                        )
+                    )
+        content = blocks if blocks else str(content)
+
+    return Message(role=role, content=content)
 
 
 def _repair_tool_pairs(messages: list[Message]) -> list[Message]:
