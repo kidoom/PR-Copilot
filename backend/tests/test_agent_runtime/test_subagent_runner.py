@@ -62,7 +62,7 @@ class FakeTool(Tool):
         return f"called {self._name}"
 
 
-async def fake_runner(*, prompt: str, agent_type: str, max_steps: int | None = None) -> SubAgentResult:
+async def fake_runner(*, prompt: str, agent_type: str, max_steps: int | None = None, task: dict | None = None) -> SubAgentResult:
     return SubAgentResult(
         output=f"ran {agent_type} with {prompt} (steps={max_steps})",
         agent_type=agent_type,
@@ -390,7 +390,7 @@ async def test_build_subagent_runner_integration():
     ])
     reg = _make_registry()
 
-    def tool_factory(child_session_id: str) -> list[Tool]:
+    def tool_factory(child_session_id: str, task: dict | None = None) -> list[Tool]:
         return [FakeTool("todo_write"), FakeTool("read_file")]
 
     runner = build_subagent_runner(
@@ -416,7 +416,7 @@ async def test_runner_creates_fresh_messages_each_call():
     ])
     reg = _make_registry()
 
-    def tool_factory(cid: str) -> list[Tool]:
+    def tool_factory(cid: str, task: dict | None = None) -> list[Tool]:
         return []
 
     runner = build_subagent_runner(
@@ -429,3 +429,51 @@ async def test_runner_creates_fresh_messages_each_call():
     assert len(model.messages_log) == 2
     assert model.messages_log[0][1].content == "first"
     assert model.messages_log[1][1].content == "second"
+
+
+@pytest.mark.asyncio
+async def test_runner_passes_task_payload_to_tool_factory():
+    model = FakeModelClient([
+        ModelResponse(content="done", tool_use_blocks=[], token_usage=TokenUsage(5, 10)),
+    ])
+    reg = _make_registry()
+    captured_tasks: list[dict | None] = []
+
+    def tool_factory(cid: str, task: dict | None = None) -> list[Tool]:
+        captured_tasks.append(task)
+        return []
+
+    runner = build_subagent_runner(
+        model=model, parent_session_id="p",
+        agent_registry=reg, child_tool_factory=tool_factory,
+    )
+
+    task_payload = {"task_id": "t1", "task_type": "security_context", "queries": ["check auth"]}
+    await runner(prompt="test", agent_type="reviewer", max_steps=3, task=task_payload)
+
+    assert len(captured_tasks) == 1
+    assert captured_tasks[0] is not None
+    assert captured_tasks[0]["task_id"] == "t1"
+
+
+@pytest.mark.asyncio
+async def test_runner_passes_none_task_for_direct_delegation():
+    model = FakeModelClient([
+        ModelResponse(content="done", tool_use_blocks=[], token_usage=TokenUsage(5, 10)),
+    ])
+    reg = _make_registry()
+    captured_tasks: list[dict | None] = []
+
+    def tool_factory(cid: str, task: dict | None = None) -> list[Tool]:
+        captured_tasks.append(task)
+        return []
+
+    runner = build_subagent_runner(
+        model=model, parent_session_id="p",
+        agent_registry=reg, child_tool_factory=tool_factory,
+    )
+
+    await runner(prompt="direct call", agent_type="reviewer", max_steps=3)
+
+    assert len(captured_tasks) == 1
+    assert captured_tasks[0] is None
