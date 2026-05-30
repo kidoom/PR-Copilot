@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -21,6 +22,16 @@ from backend.agent.subagents import (
 from backend.agent.tools.registry import ToolRegistry
 from backend.agent.tools.task import TaskTool
 
+logger = logging.getLogger(__name__)
+
+
+class WorkspacePreparationError(Exception):
+    """Raised when workspace preparation fails before subagent dispatch."""
+
+    def __init__(self, error: Any) -> None:
+        self.preparation_error = error
+        super().__init__(f"Workspace preparation failed: {getattr(error, 'message', error)}")
+
 
 MAIN_AGENT_SYSTEM_PROMPT = """\
 You are the main PR review coordinator.
@@ -40,6 +51,15 @@ class MainAgentRuntime:
     task_tool: TaskTool
     tool_registry: ToolRegistry
     child_bundles: dict[str, ChildToolBundle] = field(default_factory=dict)
+    workspace_manager: Any = None
+    run_id: str = ""
+
+    def cleanup_workspace(self) -> None:
+        if self.workspace_manager and self.run_id:
+            try:
+                self.workspace_manager.cleanup_run(self.run_id)
+            except Exception:
+                logger.warning("Failed to cleanup workspace for run %s", self.run_id, exc_info=True)
 
 
 @dataclass
@@ -81,9 +101,27 @@ class AgentDeps:
         repo_root: str,
         parent_session_id: str | None = None,
         run_id: str = "",
+        workspace_manager: Any = None,
+        pr_identity: Any = None,
+        token: str | None = None,
     ) -> MainAgentRuntime:
         child_bundles: dict[str, ChildToolBundle] = {}
         context_id = task_plan.get("context_id", "")
+
+        provider = None
+        if workspace_manager is not None and pr_identity is not None:
+            from backend.agent.tools.repo_context.provider.models import PreparationError
+
+            result = workspace_manager.prepare_workspace(
+                run_id=run_id,
+                context_id=context_id,
+                pr_identity=pr_identity,
+                local_repo_root=repo_root if repo_root else None,
+                token=token,
+            )
+            if result.error is not None:
+                raise WorkspacePreparationError(result.error)
+            provider = workspace_manager.get_provider(run_id, context_id)
 
         def child_tool_factory(
             child_session_id: str,
@@ -98,6 +136,7 @@ class AgentDeps:
                 context_id=task_context_id or context_id,
                 repo_root=repo_root,
                 pr_context=pr_context,
+                provider=provider,
             )
             child_bundles[child_session_id] = bundle
             return bundle
@@ -123,6 +162,8 @@ class AgentDeps:
             task_tool=task_tool,
             tool_registry=tool_registry,
             child_bundles=child_bundles,
+            workspace_manager=workspace_manager,
+            run_id=run_id,
         )
 
 
