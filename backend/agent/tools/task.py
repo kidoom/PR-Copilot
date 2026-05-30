@@ -4,6 +4,7 @@ import json
 from typing import Any, Callable, Awaitable
 
 from backend.agent.runtime.agent_def import AgentRegistry
+from backend.agent.runtime.review_result import ReviewResult, parse_review_result
 from backend.agent.runtime.sub_agent import SubAgentResult
 from backend.agent.tools.protocol import RiskLevel
 
@@ -112,12 +113,19 @@ class TaskTool:
                 agent_type=agent_type,
                 max_steps=max_steps,
             )
+
+            # Parse structured review result
+            parsed = parse_review_result(result.output)
+
             return json.dumps({
                 "output": result.output,
                 "agent_type": result.agent_type,
                 "child_session_id": result.child_session_id,
+                "memory_session_id": result.memory_session_id,
                 "steps": len(result.steps),
                 "stopped_by_max_steps": result.stopped_by_max_steps,
+                "parsed_result": parsed.to_dict() if parsed else None,
+                "parse_status": "valid" if parsed else "invalid",
             })
         except TaskToolError as e:
             return json.dumps({"error": str(e)})
@@ -185,16 +193,22 @@ class TaskTool:
                 })
                 continue
 
+            # Parse structured review result
+            parsed = parse_review_result(result.output)
+
             results.append({
                 "index": index,
                 "task_id": task_payload.get("task_id", ""),
                 "task_type": task_payload.get("task_type", ""),
                 "agent_type": result.agent_type,
                 "child_session_id": result.child_session_id,
+                "memory_session_id": result.memory_session_id,
                 "steps": len(result.steps),
                 "stopped_by_max_steps": result.stopped_by_max_steps,
                 "status": "ok",
                 "output": result.output,
+                "parsed_result": parsed.to_dict() if parsed else None,
+                "parse_status": "valid" if parsed else "invalid",
             })
 
         return results

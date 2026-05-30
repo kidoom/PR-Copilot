@@ -22,7 +22,7 @@ class ChildToolBundle:
 
 _BASE_PROMPT = """\
 You are a read-only context subagent. Your job is to gather evidence from the \
-repository using the provided RepoContext Lite tools.
+repository using the provided read-only tools.
 
 BEHAVIOR CONSTRAINTS:
 - You MUST NOT edit, patch, or delete any repository files.
@@ -35,7 +35,33 @@ WORKFLOW:
 1. Call todo_write to plan your investigation steps.
 2. Call verify_repo_context to confirm the workspace matches the PR.
 3. Use the available search and read tools to gather evidence.
-4. When done, call finish_context_package with your findings.
+4. When done, output your final review result as JSON in this format:
+
+```json
+{
+  "status": "success|partial|blocked|error",
+  "summary": "Brief summary of your findings",
+  "findings": [
+    {
+      "claim": "What you found",
+      "confidence": 0.0-1.0,
+      "severity": "low|medium|high|critical",
+      "evidence": [
+        {
+          "file": "path/to/file.py",
+          "line": 42,
+          "snippet": "relevant code",
+          "source": "diff|file|search"
+        }
+      ]
+    }
+  ],
+  "uncertainties": ["What you couldn't verify"],
+  "notes": ["Additional observations"]
+}
+```
+
+IMPORTANT: Your final message MUST be a valid JSON object matching this schema.
 """
 
 # --- 1.3 Per-agent focus sections ---
@@ -128,7 +154,7 @@ _PROMPT_MAP: dict[str, str] = {
 
 # --- Tool allowlists (mirrored from planner) ---
 
-_BASE_TOOLS = ["todo_write", "verify_repo_context", "finish_context_package"]
+_BASE_TOOLS = ["todo_write", "verify_repo_context"]
 
 _AGENT_ALLOWED_TOOLS: dict[str, list[str]] = {
     "test-context-agent": _BASE_TOOLS + ["read_file_patch", "search_diff", "search_tests_for", "read_repo_file"],
@@ -172,7 +198,7 @@ def build_default_subagent_registry() -> AgentRegistry:
     return registry
 
 
-# --- 4.1 Per-task RepoContext session factory ---
+# --- 4.1 Per-task stateless tool factory ---
 
 def build_context_child_tools(
     child_session_id: str,
@@ -182,35 +208,23 @@ def build_context_child_tools(
     repo_root: str = "",
     pr_context: Any = None,
 ) -> ChildToolBundle:
-    """Build RepoContext Lite tools for a child subagent session.
+    """Build stateless read-only tools for a child subagent session.
 
-    Creates a fresh RepoContextSession per task so sibling subagents
-    do not share todos, budget usage, or final_package.
+    Uses stateless tools that don't require RepoContextSession.
+    Each tool receives pr_context and repo_root as direct dependencies.
 
-    Returns a ChildToolBundle so the orchestrator can read
-    session.final_package after the subagent finishes.
+    Returns a ChildToolBundle for orchestrator compatibility.
     """
-    from backend.agent.tools.repo_context.tool_defs import create_context_tools
+    from backend.agent.tools.repo_context.stateless_tools import create_stateless_context_tools
+    from backend.agent.tools.repo_context.models import RepoContextSession
 
-    task_id = ""
-    budget = TaskBudget()
-
-    if task is not None:
-        task_id = task.get("task_id", "")
-        task_budget = task.get("budget")
-        if isinstance(task_budget, dict):
-            budget = TaskBudget(
-                max_searches=task_budget.get("max_searches", 5),
-                max_files=task_budget.get("max_files", 10),
-                max_tokens=task_budget.get("max_tokens", 3000),
-            )
-
+    # Create a minimal session for backward compatibility
+    # (will be removed in future cleanup)
     session = RepoContextSession(
         context_id=context_id or child_session_id,
-        task_id=task_id or child_session_id,
+        task_id=(task or {}).get("task_id", child_session_id),
         repo_root=repo_root,
-        budget=budget,
     )
 
-    tools = create_context_tools(session, pr_context)
+    tools = create_stateless_context_tools(repo_root, pr_context)
     return ChildToolBundle(session=session, tools=tools)
