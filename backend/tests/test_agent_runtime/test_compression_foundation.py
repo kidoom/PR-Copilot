@@ -32,6 +32,31 @@ class TestTokenEstimation:
         text = "a" * 100
         assert estimate_tokens(text) == 25
 
+    def test_estimate_tokens_cjk(self):
+        # CJK characters: ~1 token per char
+        text = "你好世界"  # 4 CJK chars
+        assert estimate_tokens(text) == 4
+
+    def test_estimate_tokens_mixed(self):
+        # Mixed English and CJK
+        text = "Hello 世界"  # 6 English + 2 CJK
+        # CJK estimate: 2 + 6//4 = 2 + 1 = 3
+        # English estimate: 8//4 = 2
+        # Max: 3
+        assert estimate_tokens(text) == 3
+
+    def test_estimate_tokens_cjk_conservative(self):
+        # CJK should be more conservative than English
+        cjk_text = "这是一段中文文本"  # 8 CJK chars
+        english_text = "a" * 32  # 32 English chars = 8 tokens
+
+        cjk_estimate = estimate_tokens(cjk_text)
+        english_estimate = estimate_tokens(english_text)
+
+        # Both should be around 8 tokens
+        assert cjk_estimate == 8
+        assert english_estimate == 8
+
     def test_estimate_message_tokens_string(self):
         msg = Message(role=Role.USER, content="Hello, world!")
         tokens = estimate_message_tokens(msg)

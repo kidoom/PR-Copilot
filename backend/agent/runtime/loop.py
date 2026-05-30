@@ -50,51 +50,52 @@ async def run_loop(
         # Build request messages (may be compacted copy)
         request_messages = list(messages)
 
-        # Apply MicroCompact if enabled
+        # Apply MicroCompact if enabled (only modifies request view)
         if _compression_enabled and compression_config.micro_compact_enabled:
             from backend.agent.runtime.compression.micro_compact import micro_compact_messages
-            from backend.agent.runtime.compression.estimation import estimate_messages_tokens
-
             request_messages = micro_compact_messages(
                 request_messages,
                 recent_count=compression_config.micro_compact_recent_results,
                 min_chars=compression_config.micro_compact_min_chars,
             )
 
-            # Check if AutoCompact is needed
-            if compression_config.auto_compact_enabled:
-                estimated_tokens = estimate_messages_tokens(request_messages)
-                if estimated_tokens >= compression_config.auto_compact_threshold:
-                    # Trigger AutoCompact
-                    try:
-                        compact_result = await _execute_auto_compact(
-                            messages=messages,
-                            model=model,
-                            session_id=session_id,
-                            memory_store=memory_store,
-                            compression_config=compression_config,
-                            compression_profile=compression_profile,
-                        )
-                        if compact_result:
-                            # Rewrite runtime messages
-                            summary_text, recent_msgs = compact_result
-                            from backend.agent.runtime.compression.compact import build_summary_boundary_message
-                            boundary_msg = build_summary_boundary_message(summary_text)
+        # AutoCompact check (independent of MicroCompact)
+        if _compression_enabled and compression_config.auto_compact_enabled:
+            from backend.agent.runtime.compression.estimation import estimate_messages_tokens
+            estimated_tokens = estimate_messages_tokens(request_messages)
+            if estimated_tokens >= compression_config.auto_compact_threshold:
+                # Save before count
+                before_count = len(messages)
+                try:
+                    compact_result = await _execute_compact(
+                        messages=messages,
+                        model=model,
+                        session_id=session_id,
+                        memory_store=memory_store,
+                        compression_config=compression_config,
+                        compression_profile=compression_profile,
+                        reason="auto_compact",
+                    )
+                    if compact_result:
+                        # Rewrite runtime messages
+                        summary_text, recent_msgs = compact_result
+                        from backend.agent.runtime.compression.compact import build_summary_boundary_message
+                        boundary_msg = build_summary_boundary_message(summary_text)
 
-                            # Clear and rebuild messages
-                            messages.clear()
-                            messages.append(boundary_msg)
-                            messages.extend(recent_msgs)
+                        # Clear and rebuild messages
+                        messages.clear()
+                        messages.append(boundary_msg)
+                        messages.extend(recent_msgs)
 
-                            # Rebuild request
-                            request_messages = list(messages)
+                        # Rebuild request
+                        request_messages = list(messages)
 
-                            if on_compact:
-                                on_compact("auto_compact", len(messages), len(request_messages))
+                        if on_compact:
+                            on_compact("auto_compact", before_count, len(messages))
 
-                    except Exception as e:
-                        # AutoCompact failure is non-fatal
-                        logger.warning(f"AutoCompact failed: {e}")
+                except Exception as e:
+                    # AutoCompact failure is non-fatal
+                    logger.warning(f"AutoCompact failed: {e}")
 
         # Call model
         try:
@@ -104,15 +105,18 @@ async def run_loop(
             if _compression_enabled and compression_config.reactive_compact_enabled:
                 from backend.agent.runtime.compression.compact import is_context_length_error
                 if is_context_length_error(e):
+                    # Save before count
+                    before_count = len(messages)
                     # ReactiveCompact
                     try:
-                        compact_result = await _execute_auto_compact(
+                        compact_result = await _execute_compact(
                             messages=messages,
                             model=model,
                             session_id=session_id,
                             memory_store=memory_store,
                             compression_config=compression_config,
                             compression_profile=compression_profile,
+                            reason="reactive_compact",
                         )
                         if compact_result:
                             summary_text, recent_msgs = compact_result
@@ -127,7 +131,7 @@ async def run_loop(
                             response = await model.chat(request_messages, tool_schemas=tool_schemas)
 
                             if on_compact:
-                                on_compact("reactive_compact", len(messages), len(request_messages))
+                                on_compact("reactive_compact", before_count, len(messages))
                         else:
                             raise
                     except Exception:
@@ -146,6 +150,7 @@ async def run_loop(
         if not response.tool_use_blocks:
             steps.append(FinalStep(output=response.content))
             final_msg = Message(role=Role.ASSISTANT, content=response.content)
+            messages.append(final_msg)  # Append before callback
             if on_message:
                 on_message(final_msg)
             return AgentResult(
@@ -246,7 +251,7 @@ async def run_loop(
     )
 
 
-async def _execute_auto_compact(
+async def _execute_compact(
     *,
     messages: list[Message],
     model: ModelClient,
@@ -254,8 +259,13 @@ async def _execute_auto_compact(
     memory_store,
     compression_config,
     compression_profile,
+    reason: str = "auto_compact",
 ) -> tuple[str, list[Message]] | None:
-    """Execute AutoCompact and persist summary."""
+    """Execute compact and persist summary.
+
+    Args:
+        reason: "auto_compact" or "reactive_compact"
+    """
     from backend.agent.runtime.compression.compact import execute_compact
 
     result = await execute_compact(
@@ -276,7 +286,7 @@ async def _execute_auto_compact(
 
         lightweight_recent = serialize_recent_messages_lightweight(recent_messages)
         append_summary(memory_store, session_id, {
-            "reason": "auto_compact",
+            "reason": reason,
             "summary": summary_text,
             "before_message_count": len(messages),
             "after_message_count": len(recent_messages) + 1,  # +1 for boundary
