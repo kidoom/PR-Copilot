@@ -97,9 +97,12 @@ def _apply_summary_boundary(
 ) -> list[Message]:
     """Apply a summary boundary, replacing older messages.
 
-    The summary payload should contain:
-    - summary_text: The summary content
-    - recent_messages: Optional list of recent messages to preserve
+    Supports standardized summary payload:
+    - reason: Why compaction happened (e.g., "auto_compact", "reactive_compact")
+    - summary: The summary text (also accepts legacy "summary_text")
+    - before_message_count: Messages before compaction
+    - after_message_count: Messages after compaction
+    - recent_messages: Recent messages to preserve
 
     Returns:
         List of messages: [summary_message, *recent_messages]
@@ -108,12 +111,19 @@ def _apply_summary_boundary(
     if not payload:
         return []
 
-    summary_text = payload.get("summary_text", "")
+    # Support both standardized "summary" and legacy "summary_text"
+    summary_text = payload.get("summary", "") or payload.get("summary_text", "")
     if not summary_text:
         return []
 
-    # Create summary message
-    summary_msg = Message(role=Role.USER, content=f"[Summary]\n{summary_text}")
+    # Create summary message with reason if available
+    reason = payload.get("reason", "")
+    if reason:
+        summary_content = f"[Context Summary - {reason}]\n{summary_text}"
+    else:
+        summary_content = f"[Context Summary]\n{summary_text}"
+
+    summary_msg = Message(role=Role.USER, content=summary_content)
 
     # Parse recent_messages if present
     recent_messages: list[Message] = []
