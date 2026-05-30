@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 
 import pytest
 
 from backend.agent.model.client import ModelClient
 from backend.agent.model.messages import Message, ModelResponse, ToolUseBlock
 from backend.deps import create_agent_deps, get_agent_deps, preload_agent_deps, set_agent_deps
+
+
+@pytest.fixture
+def temp_repo():
+    """Create a temporary repository for testing."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        os.makedirs(os.path.join(tmpdir, ".git"))
+        yield tmpdir
 
 
 class FakeModel(ModelClient):
@@ -51,7 +61,7 @@ def test_build_main_messages_includes_task_plan():
 
 
 @pytest.mark.asyncio
-async def test_main_runtime_registers_task_tool_and_records_child_bundle():
+async def test_main_runtime_registers_task_tool_and_records_child_bundle(temp_repo):
     deps = create_agent_deps()
     model = FakeModel([ModelResponse(content="child done", tool_use_blocks=[])])
     task_plan = {
@@ -63,7 +73,7 @@ async def test_main_runtime_registers_task_tool_and_records_child_bundle():
         model=model,
         task_plan=task_plan,
         pr_context=None,
-        repo_root="D:/repo",
+        repo_root=temp_repo,
         parent_session_id="parent",
     )
 
@@ -84,6 +94,6 @@ async def test_main_runtime_registers_task_tool_and_records_child_bundle():
     bundle = runtime.child_bundles[result.child_session_id]
     assert bundle.session.context_id == "ctx1"
     assert bundle.session.task_id == "task1"
-    assert bundle.session.repo_root == "D:/repo"
+    assert bundle.session.repo_root == temp_repo
     # Budget is now default (not customizable per-task in stateless mode)
     assert bundle.session.budget.max_searches == 5

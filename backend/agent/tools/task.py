@@ -4,7 +4,7 @@ import json
 from typing import Any, Callable, Awaitable
 
 from backend.agent.runtime.agent_def import AgentRegistry
-from backend.agent.runtime.review_result import ReviewResult, parse_review_result
+from backend.agent.runtime.review_result import ReviewResult, parse_review_result, validate_review_result
 from backend.agent.runtime.sub_agent import SubAgentResult
 from backend.agent.tools.protocol import RiskLevel
 
@@ -114,8 +114,10 @@ class TaskTool:
                 max_steps=max_steps,
             )
 
-            # Parse structured review result
+            # Parse and validate structured review result
             parsed = parse_review_result(result.output)
+            validation_errors = validate_review_result(parsed) if parsed else ["Failed to parse JSON"]
+            is_valid = parsed is not None and len(validation_errors) == 0
 
             return json.dumps({
                 "output": result.output,
@@ -125,7 +127,8 @@ class TaskTool:
                 "steps": len(result.steps),
                 "stopped_by_max_steps": result.stopped_by_max_steps,
                 "parsed_result": parsed.to_dict() if parsed else None,
-                "parse_status": "valid" if parsed else "invalid",
+                "parse_status": "valid" if is_valid else "invalid",
+                "validation_errors": validation_errors if not is_valid else [],
             })
         except TaskToolError as e:
             return json.dumps({"error": str(e)})
@@ -193,8 +196,10 @@ class TaskTool:
                 })
                 continue
 
-            # Parse structured review result
+            # Parse and validate structured review result
             parsed = parse_review_result(result.output)
+            validation_errors = validate_review_result(parsed) if parsed else ["Failed to parse JSON"]
+            is_valid = parsed is not None and len(validation_errors) == 0
 
             results.append({
                 "index": index,
@@ -205,10 +210,11 @@ class TaskTool:
                 "memory_session_id": result.memory_session_id,
                 "steps": len(result.steps),
                 "stopped_by_max_steps": result.stopped_by_max_steps,
-                "status": "ok",
+                "status": "ok" if is_valid else "invalid",
                 "output": result.output,
                 "parsed_result": parsed.to_dict() if parsed else None,
-                "parse_status": "valid" if parsed else "invalid",
+                "parse_status": "valid" if is_valid else "invalid",
+                "validation_errors": validation_errors if not is_valid else [],
             })
 
         return results
@@ -334,5 +340,5 @@ def _build_dispatch_prompt(task: dict[str, Any]) -> str:
         f"Expected output: {task.get('expected_output', '')}",
         f"Fallback: {task.get('fallback', '')}",
         "",
-        "Use the available repo-context tools to gather evidence. Start with todo_write, verify the repo context, then finish with finish_context_package.",
+        "Use the available repo-context tools to gather evidence. Start with todo_write, verify the repo context, then finish with your final JSON review result matching the required schema.",
     ])

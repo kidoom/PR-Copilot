@@ -214,9 +214,21 @@ def build_context_child_tools(
     Each tool receives pr_context and repo_root as direct dependencies.
 
     Returns a ChildToolBundle for orchestrator compatibility.
+
+    Raises:
+        ValueError: If repo_root is empty or not a valid directory.
     """
     from backend.agent.tools.repo_context.stateless_tools import create_stateless_context_tools
     from backend.agent.tools.repo_context.models import RepoContextSession
+    from pathlib import Path
+
+    # Validate repo_root
+    if not repo_root:
+        raise ValueError("repo_root is required for context tools")
+
+    root_path = Path(repo_root).resolve()
+    if not root_path.is_dir():
+        raise ValueError(f"repo_root is not a valid directory: {repo_root}")
 
     # Create a minimal session for backward compatibility
     # (will be removed in future cleanup)
