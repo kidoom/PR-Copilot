@@ -9,6 +9,7 @@ from backend.agent.model.config import ModelConfig
 from backend.agent.model.messages import Message, Role
 from backend.agent.model.openai_client import OpenAIModelClient
 from backend.agent.runtime.agent_def import AgentRegistry
+from backend.agent.runtime.compression.config import CompressionConfig
 from backend.agent.runtime.memory.config import get_storage_dir
 from backend.agent.runtime.memory.store import FileMemoryStore
 from backend.agent.runtime.subagent_runner import build_subagent_runner
@@ -53,6 +54,7 @@ class AgentDeps:
     model_config: ModelConfig
     subagent_registry: AgentRegistry
     memory_store: FileMemoryStore = field(default_factory=lambda: FileMemoryStore(get_storage_dir()))
+    compression_config: CompressionConfig = field(default_factory=CompressionConfig.default)
     main_agent_system_prompt: str = MAIN_AGENT_SYSTEM_PROMPT
 
     def new_model(self) -> ModelClient:
@@ -108,6 +110,7 @@ class AgentDeps:
             memory_store=self.memory_store,
             run_id=run_id,
             context_id=context_id,
+            compression_config=self.compression_config,
         )
         task_tool = TaskTool(
             runner=runner,
@@ -131,6 +134,7 @@ def create_agent_deps(*, model_prefix: str = "OPENAI") -> AgentDeps:
         model_config=ModelConfig.from_env(prefix=model_prefix),
         subagent_registry=build_default_subagent_registry(),
         memory_store=FileMemoryStore(get_storage_dir()),
+        compression_config=CompressionConfig.default(),
     )
 
 
