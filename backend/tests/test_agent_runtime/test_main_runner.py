@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from typing import Any
 
 import pytest
@@ -9,6 +10,7 @@ from backend.agent.model.client import ModelClient
 from backend.agent.model.messages import Message, ModelResponse, Role, ToolUseBlock
 from backend.agent.runtime.events import RUN_STARTED, RUN_COMPLETED, RUN_FAILED
 from backend.agent.runtime.main_runner import run_main_agent
+from backend.agent.runtime.memory.store import FileMemoryStore
 from backend.agent.runtime.run_manager import RunManager
 from backend.agent.tools.protocol import RiskLevel, Tool, ToolSchema
 from backend.deps import AgentDeps, create_agent_deps
@@ -27,10 +29,16 @@ class FakeModel(ModelClient):
         return resp
 
 
-def _make_deps_with_fake_model(model: ModelClient) -> AgentDeps:
+def _make_deps_with_fake_model(model: ModelClient, tmp_path: str | None = None) -> AgentDeps:
     import os
     os.environ.setdefault("OPENAI_API_KEY", "test-key")
     deps = create_agent_deps()
+
+    # Use temporary directory for memory store
+    if tmp_path is None:
+        tmp_path = tempfile.mkdtemp()
+    deps.memory_store = FileMemoryStore(tmp_path)
+
     original_new_model = deps.new_model
 
     def _new_model():
@@ -40,10 +48,17 @@ def _make_deps_with_fake_model(model: ModelClient) -> AgentDeps:
     return deps
 
 
+@pytest.fixture
+def tmp_dir():
+    """Create a temporary directory for tests."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        yield tmpdir
+
+
 @pytest.mark.asyncio
-async def test_run_main_agent_publishes_started_and_completed_events():
+async def test_run_main_agent_publishes_started_and_completed_events(tmp_dir):
     model = FakeModel([ModelResponse(content="done", tool_use_blocks=[])])
-    deps = _make_deps_with_fake_model(model)
+    deps = _make_deps_with_fake_model(model, tmp_dir)
     mgr = RunManager()
     mgr.create_run("ctx-1", run_id="run-1")
 
@@ -75,9 +90,9 @@ async def test_run_main_agent_publishes_started_and_completed_events():
 
 
 @pytest.mark.asyncio
-async def test_run_main_agent_task_plan_reaches_messages():
+async def test_run_main_agent_task_plan_reaches_messages(tmp_dir):
     model = FakeModel([ModelResponse(content="ok", tool_use_blocks=[])])
-    deps = _make_deps_with_fake_model(model)
+    deps = _make_deps_with_fake_model(model, tmp_dir)
     mgr = RunManager()
     mgr.create_run("ctx-1", run_id="run-1")
 
@@ -107,12 +122,12 @@ async def test_run_main_agent_task_plan_reaches_messages():
 
 
 @pytest.mark.asyncio
-async def test_run_main_agent_failure_publishes_error():
+async def test_run_main_agent_failure_publishes_error(tmp_dir):
     class BrokenModel(ModelClient):
         async def chat(self, messages, tool_schemas=None):
             raise RuntimeError("model exploded")
 
-    deps = _make_deps_with_fake_model(BrokenModel())
+    deps = _make_deps_with_fake_model(BrokenModel(), tmp_dir)
     mgr = RunManager()
     mgr.create_run("ctx-1", run_id="run-1")
 
@@ -136,9 +151,9 @@ async def test_run_main_agent_failure_publishes_error():
 
 
 @pytest.mark.asyncio
-async def test_run_main_agent_passes_max_steps():
+async def test_run_main_agent_passes_max_steps(tmp_dir):
     model = FakeModel([ModelResponse(content="ok", tool_use_blocks=[])])
-    deps = _make_deps_with_fake_model(model)
+    deps = _make_deps_with_fake_model(model, tmp_dir)
     mgr = RunManager()
     mgr.create_run("ctx-1", run_id="run-1")
 
