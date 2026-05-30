@@ -162,3 +162,6 @@ async def run_main_agent(
         })
 
         return {"error": error_msg}
+
+    finally:
+        runtime.cleanup_workspace()
