@@ -1,10 +1,22 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Any
 
 from backend.agent.runtime.agent_def import AgentDefinition, AgentRegistry
 from backend.agent.tools.protocol import Tool
 from backend.agent.tools.repo_context.models import RepoContextSession, TaskBudget
+
+
+@dataclass
+class ChildToolBundle:
+    """Holds a per-task RepoContextSession and its associated tools.
+
+    The orchestrator can read session.final_package, session.todos,
+    and session.usage after the subagent finishes.
+    """
+    session: RepoContextSession
+    tools: list[Tool] = field(default_factory=list)
 
 # --- 1.2 Shared read-only base prompt ---
 
@@ -169,11 +181,14 @@ def build_context_child_tools(
     context_id: str = "",
     repo_root: str = "",
     pr_context: Any = None,
-) -> list[Tool]:
+) -> ChildToolBundle:
     """Build RepoContext Lite tools for a child subagent session.
 
     Creates a fresh RepoContextSession per task so sibling subagents
     do not share todos, budget usage, or final_package.
+
+    Returns a ChildToolBundle so the orchestrator can read
+    session.final_package after the subagent finishes.
     """
     from backend.agent.tools.repo_context.tool_defs import create_context_tools
 
@@ -197,4 +212,5 @@ def build_context_child_tools(
         budget=budget,
     )
 
-    return create_context_tools(session, pr_context)
+    tools = create_context_tools(session, pr_context)
+    return ChildToolBundle(session=session, tools=tools)
