@@ -8,6 +8,7 @@ import pytest
 
 from backend.agent.model.client import ModelClient
 from backend.agent.model.messages import Message, ModelResponse, ToolUseBlock
+from backend.agent.runtime.memory.store import FileMemoryStore
 from backend.deps import create_agent_deps, get_agent_deps, preload_agent_deps, set_agent_deps
 
 
@@ -61,8 +62,9 @@ def test_build_main_messages_includes_task_plan():
 
 
 @pytest.mark.asyncio
-async def test_main_runtime_registers_task_tool_and_records_child_bundle(temp_repo):
+async def test_main_runtime_registers_task_tool_and_records_child_bundle(temp_repo, tmp_path):
     deps = create_agent_deps()
+    deps.memory_store = FileMemoryStore(str(tmp_path))
     model = FakeModel([ModelResponse(content="child done", tool_use_blocks=[])])
     task_plan = {
         "context_id": "ctx1",

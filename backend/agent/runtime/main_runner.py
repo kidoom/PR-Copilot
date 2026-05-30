@@ -63,6 +63,9 @@ async def run_main_agent(
     max_steps: int = 10,
     parent_session_id: str | None = None,
     event_sink: Callable[[RunEvent], None] | None = None,
+    workspace_manager: Any = None,
+    pr_identity: Any = None,
+    token: str | None = None,
 ) -> dict[str, Any]:
     def _emit(event_type: str, payload: dict[str, Any] | None = None) -> RunEvent:
         event = run_manager.publish_event(run_id, event_type, payload)
@@ -91,6 +94,7 @@ async def run_main_agent(
         "context_id": context_id,
     })
 
+    runtime = None
     try:
         model = deps.new_model()
         messages = deps.build_main_messages(task_plan)
@@ -101,6 +105,9 @@ async def run_main_agent(
             repo_root=repo_root,
             parent_session_id=parent_session_id or run_id,
             run_id=run_id,
+            workspace_manager=workspace_manager,
+            pr_identity=pr_identity,
+            token=token,
         )
 
         # Append initial messages to memory
@@ -164,4 +171,5 @@ async def run_main_agent(
         return {"error": error_msg}
 
     finally:
-        runtime.cleanup_workspace()
+        if runtime is not None:
+            runtime.cleanup_workspace()
