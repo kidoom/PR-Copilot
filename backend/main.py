@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api.routes.pr_context import router as pr_context_router
 from backend.api.routes.review import router as review_pipeline_router
+from backend.deps import preload_agent_deps
 
 app = FastAPI(title="PR Copilot", version="0.1.0")
 
@@ -15,6 +16,11 @@ app.add_middleware(
 
 app.include_router(pr_context_router)
 app.include_router(review_pipeline_router)
+
+
+@app.on_event("startup")
+async def startup() -> None:
+    preload_agent_deps()
 
 
 @app.get("/api/health")
