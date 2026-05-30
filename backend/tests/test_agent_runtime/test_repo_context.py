@@ -6,7 +6,7 @@ import tempfile
 import pytest
 from typing import Any
 
-from backend.agent_runtime.tool.repo_context.models import (
+from backend.agent.tools.repo_context.models import (
     ContextEvidencePackage,
     ContextEvidenceRef,
     ContextFinding,
@@ -18,7 +18,7 @@ from backend.agent_runtime.tool.repo_context.models import (
     ToolUsage,
     VerificationStatus,
 )
-from backend.agent_runtime.tool.repo_context.policy import (
+from backend.agent.tools.repo_context.policy import (
     check_budget_file_read,
     check_budget_search,
     check_budget_tokens,
@@ -31,7 +31,7 @@ from backend.agent_runtime.tool.repo_context.policy import (
     require_verification,
     resolve_safe_path,
 )
-from backend.agent_runtime.tool.repo_context.tools import (
+from backend.agent.tools.repo_context.service import (
     finish_context_package,
     read_check_summary,
     read_file_patch,
@@ -43,7 +43,7 @@ from backend.agent_runtime.tool.repo_context.tools import (
     todo_write,
     verify_repo_context,
 )
-from backend.agent_runtime.tool.repo_context.registrations import (
+from backend.agent.tools.repo_context.tool_defs import (
     create_context_tools,
     TOOL_NAME_SET,
 )
@@ -175,12 +175,38 @@ def test_verification_passes():
 
 
 def test_verify_repo_context_success():
+    from unittest.mock import patch
     with tempfile.TemporaryDirectory() as d:
         os.makedirs(os.path.join(d, ".git"))
         s = _make_session()
-        result = verify_repo_context(s, "owner", "repo", "sha123", d)
+        with patch("backend.agent.tools.repo_context.service._get_git_remote_origin", return_value="git@github.com:owner/repo.git"), \
+             patch("backend.agent.tools.repo_context.service._get_git_head_sha", return_value="sha123abc"):
+            result = verify_repo_context(s, "owner", "repo", "sha123", d)
         assert result["verified"] is True
         assert s.verification.status == VerificationStatus.VERIFIED
+
+
+def test_verify_repo_context_fails_when_remote_unreadable():
+    from unittest.mock import patch
+    with tempfile.TemporaryDirectory() as d:
+        os.makedirs(os.path.join(d, ".git"))
+        s = _make_session()
+        with patch("backend.agent.tools.repo_context.service._get_git_remote_origin", return_value=None):
+            result = verify_repo_context(s, "owner", "repo", "sha123", d)
+        assert result["verified"] is False
+        assert "remote origin" in result["reason"].lower()
+
+
+def test_verify_repo_context_fails_when_head_unreadable():
+    from unittest.mock import patch
+    with tempfile.TemporaryDirectory() as d:
+        os.makedirs(os.path.join(d, ".git"))
+        s = _make_session()
+        with patch("backend.agent.tools.repo_context.service._get_git_remote_origin", return_value="git@github.com:owner/repo.git"), \
+             patch("backend.agent.tools.repo_context.service._get_git_head_sha", return_value=None):
+            result = verify_repo_context(s, "owner", "repo", "sha123", d)
+        assert result["verified"] is False
+        assert "head" in result["reason"].lower()
 
 
 def test_verify_repo_context_no_git():
@@ -309,7 +335,7 @@ def test_all_tools_read_only():
 
 
 def test_patch_deep_dive_excludes_search_repo():
-    from backend.review_pipeline.context_task_planner import TASK_ROUTES
+    from backend.domain.review.context_task_planner import TASK_ROUTES
     route = TASK_ROUTES["patch_deep_dive"]
     assert "search_repo" not in route.allowed_tools
     assert "read_file_patch" in route.allowed_tools
@@ -317,14 +343,14 @@ def test_patch_deep_dive_excludes_search_repo():
 
 
 def test_all_routes_include_todo_write_and_finish():
-    from backend.review_pipeline.context_task_planner import TASK_ROUTES
+    from backend.domain.review.context_task_planner import TASK_ROUTES
     for tt, route in TASK_ROUTES.items():
         assert "todo_write" in route.allowed_tools, f"{tt} missing todo_write"
         assert "finish_context_package" in route.allowed_tools, f"{tt} missing finish_context_package"
 
 
 def test_agent_definitions_deny_recursive_tools():
-    from backend.review_pipeline.context_task_planner import AGENT_DEFINITIONS
+    from backend.domain.review.context_task_planner import AGENT_DEFINITIONS
     for name, agent in AGENT_DEFINITIONS.items():
         assert "task_tool" in agent.disallowed_tools, f"{name} missing task_tool deny"
         assert "sub_agent" in agent.disallowed_tools, f"{name} missing sub_agent deny"
