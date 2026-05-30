@@ -207,31 +207,38 @@ def build_context_child_tools(
     context_id: str = "",
     repo_root: str = "",
     pr_context: Any = None,
+    provider: Any = None,
 ) -> ChildToolBundle:
     """Build stateless read-only tools for a child subagent session.
 
-    Uses stateless tools that don't require RepoContextSession.
-    Each tool receives pr_context and repo_root as direct dependencies.
+    When a RepoProvider is given, tools are created from the provider.
+    Otherwise falls back to repo_root-based stateless tools.
 
     Returns a ChildToolBundle for orchestrator compatibility.
 
     Raises:
-        ValueError: If repo_root is empty or not a valid directory.
+        ValueError: If neither provider nor a valid repo_root is given.
     """
     from backend.agent.tools.repo_context.stateless_tools import create_stateless_context_tools
     from backend.agent.tools.repo_context.models import RepoContextSession
     from pathlib import Path
 
-    # Validate repo_root
+    if provider is not None:
+        session = RepoContextSession(
+            context_id=context_id or child_session_id,
+            task_id=(task or {}).get("task_id", child_session_id),
+            repo_root=provider.repo_root,
+        )
+        tools = create_stateless_context_tools(provider.repo_root, pr_context)
+        return ChildToolBundle(session=session, tools=tools)
+
     if not repo_root:
-        raise ValueError("repo_root is required for context tools")
+        raise ValueError("repo_root or provider is required for context tools")
 
     root_path = Path(repo_root).resolve()
     if not root_path.is_dir():
         raise ValueError(f"repo_root is not a valid directory: {repo_root}")
 
-    # Create a minimal session for backward compatibility
-    # (will be removed in future cleanup)
     session = RepoContextSession(
         context_id=context_id or child_session_id,
         task_id=(task or {}).get("task_id", child_session_id),
