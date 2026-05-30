@@ -7,7 +7,7 @@ from backend.agent.runtime.sub_agent import SubAgentResult
 from backend.agent.tools.task import TaskTool, TaskToolError, DEFAULT_MAX_STEPS, ABSOLUTE_MAX_STEPS
 
 
-async def fake_runner(*, prompt: str, agent_type: str, max_steps: int | None = None) -> SubAgentResult:
+async def fake_runner(*, prompt: str, agent_type: str, max_steps: int | None = None, task: dict | None = None) -> SubAgentResult:
     return SubAgentResult(
         output=f"ran {agent_type} with {prompt} (steps={max_steps})",
         agent_type=agent_type,
@@ -19,6 +19,8 @@ def _make_registry() -> AgentRegistry:
     reg = AgentRegistry()
     reg.register(AgentDefinition(name="reviewer", description="Reviews code", system_prompt="You review code.", default_max_steps=5))
     reg.register(AgentDefinition(name="summarizer", description="Summarizes PRs", system_prompt="You summarize.", default_max_steps=8))
+    reg.register(AgentDefinition(name="security-context-agent", description="Checks security context", system_prompt="You check security.", default_max_steps=5))
+    reg.register(AgentDefinition(name="test-context-agent", description="Finds tests", system_prompt="You find tests.", default_max_steps=5))
     return reg
 
 
@@ -127,3 +129,76 @@ async def test_intent_takes_priority_over_queries():
     tool = TaskTool(agent_registry=reg, runner=fake_runner)
     result = await tool.run(task={"intent": "Analyze security", "queries": ["q1", "q2"]}, agent_type="reviewer")
     assert "Analyze security" in result.output
+
+
+@pytest.mark.asyncio
+async def test_run_many_dispatches_tasks_by_routes():
+    reg = _make_registry()
+    tool = TaskTool(agent_registry=reg, runner=fake_runner)
+
+    results = await tool.run_many(
+        tasks=[
+            {
+                "task_id": "task_sec",
+                "task_type": "security_context",
+                "route_key": "route:security_context",
+                "intent": "check auth",
+                "target": {"files": ["backend/api/routes/review.py"]},
+                "queries": ["auth"],
+            },
+            {
+                "task_id": "task_test",
+                "task_type": "test_context",
+                "route_key": "route:test_context",
+                "intent": "find related tests",
+                "target": {"files": ["backend/domain/review/intake.py"]},
+                "queries": ["intake"],
+            },
+        ],
+        routes=[
+            {"task_type": "security_context", "route_key": "route:security_context", "agent_type": "security-context-agent", "max_steps": 4},
+            {"task_type": "test_context", "route_key": "route:test_context", "agent_type": "test-context-agent", "max_steps": 3},
+        ],
+    )
+
+    assert [r["agent_type"] for r in results] == ["security-context-agent", "test-context-agent"]
+    assert all(r["status"] == "ok" for r in results)
+    assert "backend/api/routes/review.py" in results[0]["output"]
+    assert "steps=4" in results[0]["output"]
+    assert "steps=3" in results[1]["output"]
+
+
+@pytest.mark.asyncio
+async def test_call_dispatches_task_plan_payload():
+    reg = _make_registry()
+    tool = TaskTool(agent_registry=reg, runner=fake_runner)
+
+    result_json = await tool.call({
+        "task_plan": {
+            "tasks": [
+                {
+                    "task_id": "task_sec",
+                    "task_type": "security_context",
+                    "route_key": "route:security_context",
+                    "intent": "check auth",
+                    "queries": ["auth"],
+                },
+            ],
+            "routes": [
+                {"task_type": "security_context", "route_key": "route:security_context", "agent_type": "security-context-agent", "max_steps": 4},
+            ],
+        },
+    })
+
+    result = __import__("json").loads(result_json)
+    assert result["dispatched"] == 1
+    assert result["results"][0]["agent_type"] == "security-context-agent"
+
+
+@pytest.mark.asyncio
+async def test_run_many_requires_non_empty_tasks():
+    reg = _make_registry()
+    tool = TaskTool(agent_registry=reg, runner=fake_runner)
+
+    with pytest.raises(TaskToolError):
+        await tool.run_many(tasks=[], routes=[])

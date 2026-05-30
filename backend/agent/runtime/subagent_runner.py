@@ -32,7 +32,7 @@ def build_child_tool_registry(child_tools: list[Tool]) -> ToolRegistry:
     return registry
 
 
-ChildToolFactory = Callable[[str], list[Tool]]
+ChildToolFactory = Callable[..., list[Tool]]
 
 
 async def run_subagent(
@@ -76,6 +76,7 @@ def build_subagent_runner(
         prompt: str,
         agent_type: str,
         max_steps: int | None = None,
+        task: dict[str, Any] | None = None,
     ) -> SubAgentResult:
         try:
             agent_def = agent_registry.resolve(agent_type)
@@ -87,7 +88,7 @@ def build_subagent_runner(
             )
 
         child_session_id = generate_child_session_id(parent_session_id)
-        all_child_tools = child_tool_factory(child_session_id)
+        all_child_tools = child_tool_factory(child_session_id, task=task)
         child_registry = build_child_tool_registry(all_child_tools)
         child_tools = filter_tools(child_registry, agent_def)
         effective_max_steps = max_steps if max_steps is not None else agent_def.default_max_steps

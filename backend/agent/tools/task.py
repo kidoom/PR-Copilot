@@ -55,6 +55,20 @@ class TaskTool:
                 },
                 "max_steps": {"type": "integer", "description": "Maximum steps for the subagent (clamped to 1-50)"},
                 "task": {"type": "object", "description": "Task payload with queries/intent/target as alternative to prompt"},
+                "tasks": {
+                    "type": "array",
+                    "description": "Planner task list to dispatch to matching subagents",
+                    "items": {"type": "object"},
+                },
+                "routes": {
+                    "type": "array",
+                    "description": "Planner routes used to map task_type/route_key to agent_type and max_steps",
+                    "items": {"type": "object"},
+                },
+                "task_plan": {
+                    "type": "object",
+                    "description": "Full planner TaskPlan payload containing tasks and routes",
+                },
             },
         }
 
@@ -71,12 +85,27 @@ class TaskTool:
         return False
 
     async def call(self, input: dict[str, Any]) -> str:
+        task_plan = input.get("task_plan")
+        tasks = input.get("tasks")
+        routes = input.get("routes")
         prompt = input.get("prompt")
         agent_type = input.get("agent_type") or self._agent_types[0]
         max_steps = input.get("max_steps")
         task = input.get("task")
 
         try:
+            if task_plan is not None or tasks is not None:
+                results = await self.run_many(
+                    task_plan=task_plan,
+                    tasks=tasks,
+                    routes=routes,
+                    max_steps=max_steps,
+                )
+                return json.dumps({
+                    "dispatched": len(results),
+                    "results": results,
+                })
+
             result = await self.run(
                 prompt=prompt,
                 task=task,
@@ -92,6 +121,76 @@ class TaskTool:
             })
         except TaskToolError as e:
             return json.dumps({"error": str(e)})
+
+    async def run_many(
+        self,
+        *,
+        task_plan: dict[str, Any] | None = None,
+        tasks: list[dict[str, Any]] | None = None,
+        routes: list[dict[str, Any]] | None = None,
+        max_steps: int | None = None,
+    ) -> list[dict[str, Any]]:
+        if task_plan is not None:
+            tasks = task_plan.get("tasks", tasks)
+            routes = task_plan.get("routes", routes)
+
+        if not isinstance(tasks, list) or not tasks:
+            raise TaskToolError("TaskTool requires a non-empty tasks list for batch dispatch.")
+
+        route_index = _build_route_index(routes or [])
+        results: list[dict[str, Any]] = []
+
+        for index, raw_task in enumerate(tasks):
+            if not isinstance(raw_task, dict):
+                results.append({
+                    "index": index,
+                    "status": "error",
+                    "error": "Task entry must be an object.",
+                })
+                continue
+
+            route = _resolve_route(raw_task, route_index)
+            effective_agent_type = (
+                raw_task.get("agent_type")
+                or route.get("agent_type")
+                or _agent_type_from_task_type(raw_task.get("task_type", ""))
+                or self._agent_types[0]
+            )
+            task_max_steps = max_steps if max_steps is not None else route.get("max_steps")
+            task_payload = _build_task_payload(raw_task, route)
+            prompt = _build_dispatch_prompt(task_payload)
+
+            try:
+                result = await self.run(
+                    prompt=prompt,
+                    task=task_payload,
+                    agent_type=effective_agent_type,
+                    max_steps=task_max_steps,
+                )
+            except TaskToolError as exc:
+                results.append({
+                    "index": index,
+                    "task_id": task_payload.get("task_id", ""),
+                    "task_type": task_payload.get("task_type", ""),
+                    "agent_type": effective_agent_type,
+                    "status": "error",
+                    "error": str(exc),
+                })
+                continue
+
+            results.append({
+                "index": index,
+                "task_id": task_payload.get("task_id", ""),
+                "task_type": task_payload.get("task_type", ""),
+                "agent_type": result.agent_type,
+                "child_session_id": result.child_session_id,
+                "steps": len(result.steps),
+                "stopped_by_max_steps": result.stopped_by_max_steps,
+                "status": "ok",
+                "output": result.output,
+            })
+
+        return results
 
     async def run(
         self,
@@ -125,6 +224,7 @@ class TaskTool:
             prompt=effective_prompt,
             agent_type=effective_agent_type,
             max_steps=steps,
+            task=task,
         )
 
 
@@ -139,3 +239,79 @@ def _build_prompt_from_queries(task: dict[str, Any]) -> str | None:
             return f"Perform {task_type} on {', '.join(target) if isinstance(target, list) else target}"
         return f"Perform {task_type}"
     return None
+
+
+def _build_route_index(routes: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    index: dict[str, dict[str, Any]] = {}
+    for route in routes:
+        if not isinstance(route, dict):
+            continue
+        task_type = route.get("task_type")
+        route_key = route.get("route_key")
+        if task_type:
+            index[f"task_type:{task_type}"] = route
+        if route_key:
+            index[f"route_key:{route_key}"] = route
+    return index
+
+
+def _resolve_route(task: dict[str, Any], route_index: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    route_key = task.get("route_key")
+    if route_key and f"route_key:{route_key}" in route_index:
+        return route_index[f"route_key:{route_key}"]
+    task_type = task.get("task_type")
+    if task_type and f"task_type:{task_type}" in route_index:
+        return route_index[f"task_type:{task_type}"]
+    return {}
+
+
+def _agent_type_from_task_type(task_type: str) -> str:
+    if not task_type:
+        return ""
+    return f"{task_type.replace('_', '-')}-agent"
+
+
+def _build_task_payload(task: dict[str, Any], route: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(task)
+    target = payload.get("target")
+    if isinstance(target, dict):
+        if "target_files" not in payload:
+            payload["target_files"] = target.get("files", [])
+        if "target_directories" not in payload:
+            payload["target_directories"] = target.get("directories", [])
+        if "target_symbols" not in payload:
+            payload["target_symbols"] = target.get("symbols", [])
+        if "target_keywords" not in payload:
+            payload["target_keywords"] = target.get("keywords", [])
+    if route:
+        payload.setdefault("route", route)
+        payload.setdefault("output_schema", route.get("output_schema", {}))
+    return payload
+
+
+def _format_list(values: Any) -> str:
+    if not values:
+        return "- none"
+    if isinstance(values, list):
+        return "\n".join(f"- {v}" for v in values)
+    return f"- {values}"
+
+
+def _build_dispatch_prompt(task: dict[str, Any]) -> str:
+    return "\n".join([
+        f"Task ID: {task.get('task_id', '')}",
+        f"Task type: {task.get('task_type', '')}",
+        f"Intent: {task.get('intent', '')}",
+        f"Priority: {task.get('priority', '')}",
+        "",
+        "Target files:",
+        _format_list(task.get("target_files") or task.get("target")),
+        "",
+        "Queries:",
+        _format_list(task.get("queries")),
+        "",
+        f"Expected output: {task.get('expected_output', '')}",
+        f"Fallback: {task.get('fallback', '')}",
+        "",
+        "Use the available repo-context tools to gather evidence. Start with todo_write, verify the repo context, then finish with finish_context_package.",
+    ])

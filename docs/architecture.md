@@ -403,6 +403,69 @@ GitHub API
 
 ---
 
+## 5.1 Planner → TaskTool → Subagent 执行流程
+
+```text
+Planner (context_task_planner.py)
+  │
+  │ build_context_task_plan(ctx, evidence)
+  ▼
+TaskPlan { tasks[], routes[], agents[] }
+  │
+  │ 传递给 TaskTool.call({ task_plan })
+  ▼
+TaskTool.run_many()
+  │
+  ├─ 遍历每个 task
+  │   ├─ _resolve_route(task, route_index)
+  │   │   → route_key 优先，task_type 次之，conventional fallback 最后
+  │   ├─ 确定 effective_agent_type
+  │   ├─ _build_dispatch_prompt(task_payload)
+  │   └─ self.run(prompt, task, agent_type, max_steps)
+  │       │
+  │       │ 调用 runner
+  │       ▼
+  │   build_subagent_runner() 返回的 runner
+  │       ├─ AgentRegistry.resolve(agent_type) → AgentDefinition
+  │       ├─ child_tool_factory(child_session_id, task)
+  │       │   └─ build_context_child_tools()
+  │       │       ├─ 创建 RepoContextSession(context_id, task_id, budget)
+  │       │       └─ create_context_tools(session, pr_context)
+  │       ├─ filter_tools(registry, agent_def)
+  │       │   └─ 按 allowed_tools 过滤，移除 task/task_tool/sub_agent
+  │       └─ run_subagent(model, agent_def, prompt, max_steps, child_tools)
+  │           │
+  │           │ SubAgent 独立执行
+  │           ▼
+  │       SubAgent { output, agent_type, child_session_id, steps }
+  │
+  ▼
+results[] — 每个 task 一个结构化结果
+```
+
+### 子 Agent 注册
+
+七个 context subagent 定义在 `backend/agent/subagents.py`：
+
+| Agent Type | 职责 |
+|---|---|
+| `test-context-agent` | 查找相关测试、测试缺口、覆盖率信号 |
+| `reference-context-agent` | 查找引用、调用方、API 使用、符号影响 |
+| `security-context-agent` | 检查认证、授权、密钥、注入、输入验证 |
+| `config-context-agent` | 检查配置、环境变量、依赖、CI/CD |
+| `data-context-agent` | 检查 schema、migration、model、缓存、数据访问 |
+| `runtime-context-agent` | 检查异常处理、异步、并发、超时、重试、资源生命周期 |
+| `patch-deep-dive-agent` | 深入分析复杂 patch 的边界情况和实现风险 |
+
+### 添加新的 SubAgent 类型
+
+1. 在 `backend/agent/subagents.py` 中添加 prompt 常量（base + focus section）
+2. 在 `_PROMPT_MAP`、`_AGENT_ALLOWED_TOOLS`、`_AGENT_DESCRIPTIONS` 中注册
+3. 在 `backend/domain/review/context_task_planner.py` 的 `TASK_ROUTES` 和 `AGENT_DEFINITIONS` 中添加对应路由
+4. 运行 `test_subagents.py` 验证注册完整性
+
+---
+
 ## 6. 评分算法设计
 
 ### 6.1 优先级评分（0-100）
