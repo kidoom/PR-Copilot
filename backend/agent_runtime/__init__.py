@@ -2,7 +2,7 @@ from backend.agent_runtime.runtime.agent_def import AgentDefinition, AgentRegist
 from backend.agent_runtime.runtime.loop import run_loop
 from backend.agent_runtime.runtime.results import AgentResult, ToolExecutionResult
 from backend.agent_runtime.runtime.sub_agent import SubAgentResult
-from backend.agent_runtime.runtime.task_tool import TaskTool, TaskToolError
+from backend.agent_runtime.tool.task import TaskTool, TaskToolError
 from backend.agent_runtime.runtime.subagent_runner import (
     build_child_messages,
     build_child_tool_registry,

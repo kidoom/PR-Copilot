@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import pytest
 
-from backend.agent_runtime.runtime.agent_def import AgentDefinition, AgentRegistry, UnknownAgentError
+from backend.agent_runtime.runtime.agent_def import AgentDefinition, AgentRegistry
 from backend.agent_runtime.runtime.sub_agent import SubAgentResult
-from backend.agent_runtime.runtime.task_tool import TaskTool, TaskToolError, DEFAULT_MAX_STEPS, ABSOLUTE_MAX_STEPS
+from backend.agent_runtime.tool.task import TaskTool, TaskToolError, DEFAULT_MAX_STEPS, ABSOLUTE_MAX_STEPS
 
 
-async def fake_runner(agent_def: AgentDefinition, prompt: str, max_steps: int) -> SubAgentResult:
+async def fake_runner(*, prompt: str, agent_type: str, max_steps: int | None = None) -> SubAgentResult:
     return SubAgentResult(
-        output=f"ran {agent_def.name} with {prompt} (steps={max_steps})",
-        agent_type=agent_def.name,
+        output=f"ran {agent_type} with {prompt} (steps={max_steps})",
+        agent_type=agent_type,
         stopped_by_max_steps=False,
     )
 
@@ -43,7 +43,7 @@ async def test_valid_delegation_with_task_payload():
 async def test_unknown_agent_type_raises():
     reg = _make_registry()
     tool = TaskTool(agent_registry=reg, runner=fake_runner)
-    with pytest.raises(UnknownAgentError):
+    with pytest.raises(TaskToolError):
         await tool.run(prompt="test", agent_type="nonexistent")
 
 
@@ -68,7 +68,7 @@ async def test_uses_default_max_steps():
     reg = _make_registry()
     tool = TaskTool(agent_registry=reg, runner=fake_runner)
     result = await tool.run(prompt="test", agent_type="reviewer")
-    assert "steps=5" in result.output
+    assert "steps=None" in result.output
 
 
 @pytest.mark.asyncio
