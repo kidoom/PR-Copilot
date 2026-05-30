@@ -466,6 +466,59 @@ results[] — 每个 task 一个结构化结果
 
 ---
 
+## 5.2 Agent Run 与 WebSocket 流式输出约束
+
+前端真正使用 Agent 时，后端不能用一个长时间阻塞的 HTTP 请求等待整轮 review 完成。Agent 执行应拆成两条通道：
+
+- HTTP API：创建 run、返回 `run_id` 和初始状态；查询 run 状态；取消 run；读取最终结果或历史记录。
+- WebSocket：按 `run_id` 订阅实时事件，流式返回 main agent 输出、工具调用、SubAgent 启动/完成、错误和最终完成事件。
+
+推荐交互流程：
+
+```text
+Frontend
+  │
+  │ POST /api/review/runs { context_id, task_plan? }
+  ▼
+Backend HTTP
+  │
+  │ 创建 AgentRunSession，返回 { run_id, status: "queued" | "running" }
+  ▼
+Frontend
+  │
+  │ WS /ws/review-runs/{run_id}
+  ▼
+Backend WebSocket
+  │
+  ├─ run.started
+  ├─ message.delta
+  ├─ tool.call { name: "task", input_summary }
+  ├─ subagent.started { agent_type, task_id }
+  ├─ subagent.progress / tool.call / tool.result
+  ├─ subagent.completed { agent_type, task_id, status }
+  ├─ message.delta
+  └─ run.completed / run.failed / run.cancelled
+```
+
+因此，`TaskPlan -> main agent -> TaskTool -> SubAgent` 的执行入口不应设计成同步 HTTP 大响应。HTTP 层只负责启动和管理 run；Agent 输出、执行追踪和工具观测结果都应通过 WebSocket 事件流返回前端。
+
+后续运行时建议拆分为：
+
+- `backend/api/routes/review_runs.py`：HTTP 创建、查询、取消 review run。
+- `backend/api/routes/review_ws.py`：WebSocket 订阅 run 事件。
+- `backend/agent/runtime/run_manager.py`：管理 `run_id`、状态、后台任务、取消信号和最终结果。
+- `backend/agent/runtime/events.py`：定义统一事件结构，例如 `run.started`、`message.delta`、`tool.call`、`tool.result`、`subagent.started`、`subagent.completed`、`run.completed`。
+- `backend/agent/runtime/main_runner.py`：使用全局 `AgentDeps` 构建 model、main messages、main runtime，并启动 `run_loop()`。
+
+边界原则：
+
+- `backend/deps.py` 只预加载静态依赖和构造单次运行态，不直接代表一次用户 run。
+- `main_runner` 负责把 planner 输出 append 到 main agent messages，并启动 main loop。
+- main agent 仍通过 `TaskTool` 分发任务，不能由 HTTP API 或 run manager 直接绕过 main agent 去调 SubAgent。
+- WebSocket 事件必须来自实际执行过程，不能为了前端展示伪造 tool/subagent 事件。
+
+---
+
 ## 6. 评分算法设计
 
 ### 6.1 优先级评分（0-100）
