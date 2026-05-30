@@ -8,6 +8,7 @@ import pytest
 
 from backend.agent.model.client import ModelClient
 from backend.agent.model.messages import Message, ModelResponse, ToolUseBlock
+from backend.agent.runtime.memory.store import FileMemoryStore
 from backend.agent.tools.repo_context.provider.local import LocalRepoProvider
 from backend.agent.tools.repo_context.provider.models import (
     PRIdentity,
@@ -51,7 +52,7 @@ class FakeModel(ModelClient):
 
 class TestSharedProviderIntegration:
     @pytest.mark.asyncio
-    async def test_multiple_subagents_share_provider(self):
+    async def test_multiple_subagents_share_provider(self, tmp_path):
         """Multiple subagents for the same run should share the same provider."""
         with tempfile.TemporaryDirectory() as tmpdir:
             _init_git_repo(tmpdir, "https://github.com/owner/repo.git")
@@ -69,6 +70,7 @@ class TestSharedProviderIntegration:
             assert provider is not None
 
             deps = create_agent_deps()
+            deps.memory_store = FileMemoryStore(str(tmp_path))
             model = FakeModel([
                 ModelResponse(content="done1", tool_use_blocks=[]),
                 ModelResponse(content="done2", tool_use_blocks=[]),

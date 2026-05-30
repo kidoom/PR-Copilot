@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable
 
 from backend.agent.model.client import ModelClient
@@ -23,6 +25,19 @@ from backend.agent.tools.registry import ToolRegistry
 from backend.agent.tools.task import TaskTool
 
 logger = logging.getLogger(__name__)
+
+
+def _default_repo_temp_root() -> str:
+    configured = os.environ.get("PR_COPILOT_REPO_TEMP_ROOT")
+    if configured:
+        return configured
+    return str(Path(get_storage_dir()) / "repo-workspaces")
+
+
+def create_workspace_manager() -> Any:
+    from backend.agent.tools.repo_context.provider.workspace import RepoWorkspaceManager
+
+    return RepoWorkspaceManager(temp_root=_default_repo_temp_root())
 
 
 class WorkspacePreparationError(Exception):
@@ -75,6 +90,7 @@ class AgentDeps:
     subagent_registry: AgentRegistry
     memory_store: FileMemoryStore = field(default_factory=lambda: FileMemoryStore(get_storage_dir()))
     compression_config: CompressionConfig = field(default_factory=CompressionConfig.default)
+    workspace_manager: Any = field(default_factory=create_workspace_manager)
     main_agent_system_prompt: str = MAIN_AGENT_SYSTEM_PROMPT
 
     def new_model(self) -> ModelClient:
@@ -108,11 +124,11 @@ class AgentDeps:
         child_bundles: dict[str, ChildToolBundle] = {}
         context_id = task_plan.get("context_id", "")
 
+        active_workspace_manager = workspace_manager or self.workspace_manager
         provider = None
-        if workspace_manager is not None and pr_identity is not None:
-            from backend.agent.tools.repo_context.provider.models import PreparationError
+        if active_workspace_manager is not None and pr_identity is not None:
 
-            result = workspace_manager.prepare_workspace(
+            result = active_workspace_manager.prepare_workspace(
                 run_id=run_id,
                 context_id=context_id,
                 pr_identity=pr_identity,
@@ -121,7 +137,7 @@ class AgentDeps:
             )
             if result.error is not None:
                 raise WorkspacePreparationError(result.error)
-            provider = workspace_manager.get_provider(run_id, context_id)
+            provider = active_workspace_manager.get_provider(run_id, context_id)
 
         def child_tool_factory(
             child_session_id: str,
@@ -162,7 +178,7 @@ class AgentDeps:
             task_tool=task_tool,
             tool_registry=tool_registry,
             child_bundles=child_bundles,
-            workspace_manager=workspace_manager,
+            workspace_manager=active_workspace_manager if provider is not None else None,
             run_id=run_id,
         )
 
@@ -176,6 +192,7 @@ def create_agent_deps(*, model_prefix: str = "OPENAI") -> AgentDeps:
         subagent_registry=build_default_subagent_registry(),
         memory_store=FileMemoryStore(get_storage_dir()),
         compression_config=CompressionConfig.default(),
+        workspace_manager=create_workspace_manager(),
     )
 
 
