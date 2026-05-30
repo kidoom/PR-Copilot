@@ -77,7 +77,6 @@ async def test_main_runtime_registers_task_tool_and_records_child_bundle():
             "context_id": "ctx1",
             "task_id": "task1",
             "task_type": "security_context",
-            "budget": {"max_searches": 2, "max_files": 3, "max_tokens": 1000},
         },
     )
 
@@ -86,4 +85,5 @@ async def test_main_runtime_registers_task_tool_and_records_child_bundle():
     assert bundle.session.context_id == "ctx1"
     assert bundle.session.task_id == "task1"
     assert bundle.session.repo_root == "D:/repo"
-    assert bundle.session.budget.max_searches == 2
+    # Budget is now default (not customizable per-task in stateless mode)
+    assert bundle.session.budget.max_searches == 5

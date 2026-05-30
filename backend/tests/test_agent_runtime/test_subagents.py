@@ -52,7 +52,8 @@ class TestSubagentPrompts:
             agent = registry.resolve(name)
             assert "todo_write" in agent.system_prompt
             assert "verify_repo_context" in agent.system_prompt
-            assert "finish_context_package" in agent.system_prompt
+            # finish_context_package removed - subagents now output structured JSON directly
+            assert "final review result" in agent.system_prompt.lower() or "json" in agent.system_prompt.lower()
 
     def test_security_agent_mentions_secrets(self):
         registry = build_default_subagent_registry()
@@ -77,7 +78,9 @@ class TestSubagentTools:
         registry = build_default_subagent_registry()
         for agent_type, planner_def in AGENT_DEFINITIONS.items():
             agent = registry.resolve(agent_type)
-            assert set(agent.allowed_tools) == set(planner_def.allowed_tools), \
+            # Remove finish_context_package from planner tools for comparison
+            expected_tools = set(planner_def.allowed_tools) - {"finish_context_package"}
+            assert set(agent.allowed_tools) == expected_tools, \
                 f"Tool mismatch for {agent_type}"
 
     def test_no_agent_has_task_in_allowed_tools(self):
@@ -123,13 +126,15 @@ class TestPerTaskSessionBinding:
         assert bundle.session.task_id == "child_xyz"
 
     def test_session_budget_from_task(self):
+        # Budget is no longer customizable per-task in stateless mode
         bundle = build_context_child_tools(
             "child_1",
-            task={"task_id": "t1", "budget": {"max_searches": 2, "max_files": 3, "max_tokens": 1000}},
+            task={"task_id": "t1"},
         )
-        assert bundle.session.budget.max_searches == 2
-        assert bundle.session.budget.max_files == 3
-        assert bundle.session.budget.max_tokens == 1000
+        # Uses default budget
+        assert bundle.session.budget.max_searches == 5
+        assert bundle.session.budget.max_files == 10
+        assert bundle.session.budget.max_tokens == 3000
 
     def test_session_default_budget(self):
         bundle = build_context_child_tools("child_1")
@@ -138,8 +143,8 @@ class TestPerTaskSessionBinding:
         assert bundle.session.budget.max_tokens == 3000
 
     def test_sibling_sessions_are_independent(self):
-        task_a = {"task_id": "task_a", "budget": {"max_searches": 2}}
-        task_b = {"task_id": "task_b", "budget": {"max_searches": 5}}
+        task_a = {"task_id": "task_a"}
+        task_b = {"task_id": "task_b"}
 
         bundle_a = build_context_child_tools("child_a", task=task_a, context_id="ctx_1")
         bundle_b = build_context_child_tools("child_b", task=task_b, context_id="ctx_1")
@@ -147,7 +152,8 @@ class TestPerTaskSessionBinding:
         assert bundle_a.session is not bundle_b.session
         assert bundle_a.session.task_id == "task_a"
         assert bundle_b.session.task_id == "task_b"
-        assert bundle_a.session.budget.max_searches == 2
+        # Both use default budget in stateless mode
+        assert bundle_a.session.budget.max_searches == 5
         assert bundle_b.session.budget.max_searches == 5
 
     def test_sibling_todos_are_isolated(self):
@@ -190,7 +196,7 @@ class TestReadOnlyPermissions:
     def test_only_repo_context_tools_in_allowed(self):
         registry = build_default_subagent_registry()
         valid_tools = {
-            "todo_write", "verify_repo_context", "finish_context_package",
+            "todo_write", "verify_repo_context",
             "read_file_patch", "search_diff", "search_repo", "read_repo_file",
             "search_tests_for", "read_repo_manifest", "read_check_summary",
         }
