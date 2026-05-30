@@ -111,12 +111,24 @@ async def run_main_agent(
         def on_message(msg: Message) -> None:
             append_message(memory_store, session_id, _message_to_payload(msg))
 
+        # Get compression config and profile
+        from backend.agent.runtime.compression.compact_prompts import CompactProfile, select_compact_profile
+        from backend.agent.runtime.compression.config import CompressionConfig
+
+        compression_config = deps.compression_config if hasattr(deps, 'compression_config') else CompressionConfig.default()
+        compression_profile = select_compact_profile("main")
+
         result = await run_loop(
             model=model,
             tool_registry=runtime.tool_registry,
             messages=messages,
             max_steps=max_steps,
             on_message=on_message,
+            # Compression parameters
+            session_id=session_id,
+            memory_store=memory_store,
+            compression_config=compression_config,
+            compression_profile=compression_profile,
         )
 
         output_payload = {

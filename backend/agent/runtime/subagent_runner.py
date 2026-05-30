@@ -82,6 +82,8 @@ async def run_subagent(
     run_id: str = "",
     context_id: str = "",
     task_id: str = "",
+    # Compression parameters
+    compression_config=None,  # CompressionConfig | None
 ) -> SubAgentResult:
     # Create subagent memory session if store is provided
     subagent_session_id = ""
@@ -111,12 +113,21 @@ async def run_subagent(
         if memory_store and subagent_session_id:
             append_message(memory_store, subagent_session_id, _message_to_payload(msg))
 
+    # Get compression profile for subagent
+    from backend.agent.runtime.compression.compact_prompts import CompactProfile, select_compact_profile
+    compression_profile = select_compact_profile("subagent", agent_def.name)
+
     result: AgentResult = await run_loop(
         model=model,
         tool_registry=tool_registry,
         messages=messages,
         max_steps=max_steps,
         on_message=on_message if memory_store and subagent_session_id else None,
+        # Compression parameters
+        session_id=subagent_session_id,
+        memory_store=memory_store,
+        compression_config=compression_config,
+        compression_profile=compression_profile,
     )
 
     return SubAgentResult(
@@ -139,6 +150,7 @@ def build_subagent_runner(
     memory_store: FileMemoryStore | None = None,
     run_id: str = "",
     context_id: str = "",
+    compression_config=None,  # CompressionConfig | None
 ) -> Callable[..., Awaitable[SubAgentResult]]:
     async def runner(
         *,
@@ -185,6 +197,7 @@ def build_subagent_runner(
             run_id=run_id,
             context_id=context_id,
             task_id=task_id,
+            compression_config=compression_config,
         )
 
     return runner
