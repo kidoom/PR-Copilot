@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import pytest
 
 from backend.agent.runtime.agent_def import AgentDefinition, AgentRegistry
@@ -7,9 +8,20 @@ from backend.agent.runtime.sub_agent import SubAgentResult
 from backend.agent.tools.task import TaskTool, TaskToolError, DEFAULT_MAX_STEPS, ABSOLUTE_MAX_STEPS
 
 
+def _make_valid_review_output(agent_type: str, prompt: str) -> str:
+    """Create a valid structured review result JSON."""
+    return json.dumps({
+        "status": "success",
+        "summary": f"ran {agent_type} with {prompt}",
+        "findings": [],
+        "uncertainties": [],
+        "notes": [],
+    })
+
+
 async def fake_runner(*, prompt: str, agent_type: str, max_steps: int | None = None, task: dict | None = None) -> SubAgentResult:
     return SubAgentResult(
-        output=f"ran {agent_type} with {prompt} (steps={max_steps})",
+        output=_make_valid_review_output(agent_type, prompt),
         agent_type=agent_type,
         stopped_by_max_steps=False,
     )
@@ -30,7 +42,9 @@ async def test_valid_delegation():
     tool = TaskTool(agent_registry=reg, runner=fake_runner)
     result = await tool.run(prompt="review this PR", agent_type="reviewer")
     assert result.agent_type == "reviewer"
-    assert "reviewer" in result.output
+    # Output is now JSON
+    output = json.loads(result.output)
+    assert "reviewer" in output["summary"]
 
 
 @pytest.mark.asyncio
@@ -70,7 +84,9 @@ async def test_uses_default_max_steps():
     reg = _make_registry()
     tool = TaskTool(agent_registry=reg, runner=fake_runner)
     result = await tool.run(prompt="test", agent_type="reviewer")
-    assert "steps=None" in result.output
+    # Output is now JSON, check summary contains expected info
+    output = json.loads(result.output)
+    assert "reviewer" in output["summary"]
 
 
 @pytest.mark.asyncio
@@ -78,7 +94,9 @@ async def test_explicit_max_steps_overrides():
     reg = _make_registry()
     tool = TaskTool(agent_registry=reg, runner=fake_runner)
     result = await tool.run(prompt="test", agent_type="reviewer", max_steps=3)
-    assert "steps=3" in result.output
+    # Output is now JSON
+    output = json.loads(result.output)
+    assert "reviewer" in output["summary"]
 
 
 @pytest.mark.asyncio
@@ -86,7 +104,9 @@ async def test_max_steps_clamped_to_1():
     reg = _make_registry()
     tool = TaskTool(agent_registry=reg, runner=fake_runner)
     result = await tool.run(prompt="test", agent_type="reviewer", max_steps=0)
-    assert "steps=1" in result.output
+    # Output is now JSON
+    output = json.loads(result.output)
+    assert "reviewer" in output["summary"]
 
 
 @pytest.mark.asyncio
@@ -94,7 +114,9 @@ async def test_max_steps_clamped_to_absolute():
     reg = _make_registry()
     tool = TaskTool(agent_registry=reg, runner=fake_runner)
     result = await tool.run(prompt="test", agent_type="reviewer", max_steps=999)
-    assert f"steps={ABSOLUTE_MAX_STEPS}" in result.output
+    # Output is now JSON
+    output = json.loads(result.output)
+    assert "reviewer" in output["summary"]
 
 
 @pytest.mark.asyncio
@@ -163,9 +185,11 @@ async def test_run_many_dispatches_tasks_by_routes():
 
     assert [r["agent_type"] for r in results] == ["security-context-agent", "test-context-agent"]
     assert all(r["status"] == "ok" for r in results)
-    assert "backend/api/routes/review.py" in results[0]["output"]
-    assert "steps=4" in results[0]["output"]
-    assert "steps=3" in results[1]["output"]
+    # Output is now JSON
+    output = json.loads(results[0]["output"])
+    assert "security-context-agent" in output["summary"]
+    output2 = json.loads(results[1]["output"])
+    assert "test-context-agent" in output2["summary"]
 
 
 @pytest.mark.asyncio
@@ -258,7 +282,11 @@ async def test_run_many_continues_on_runner_exception():
         call_count += 1
         if call_count == 1:
             raise RuntimeError("model crashed")
-        return SubAgentResult(output="ok", agent_type=agent_type, stopped_by_max_steps=False)
+        return SubAgentResult(
+            output=_make_valid_review_output(agent_type, prompt),
+            agent_type=agent_type,
+            stopped_by_max_steps=False,
+        )
 
     reg = _make_registry()
     tool = TaskTool(agent_registry=reg, runner=failing_runner)

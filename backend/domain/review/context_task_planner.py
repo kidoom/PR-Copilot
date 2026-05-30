@@ -209,7 +209,7 @@ def task_identity(task: ContextTask) -> str:
 
 _SUBAGENT_DISALLOWED_TOOLS = ["task_tool", "sub_agent"]
 
-_BASE_TOOLS = ["todo_write", "verify_repo_context", "finish_context_package"]
+_BASE_TOOLS = ["todo_write", "verify_repo_context"]
 
 _PER_TASK_ALLOWED_TOOLS: dict[str, list[str]] = {
     "test_context": _BASE_TOOLS + ["read_file_patch", "search_diff", "search_tests_for", "read_repo_file"],

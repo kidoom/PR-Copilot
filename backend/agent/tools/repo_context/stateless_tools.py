@@ -471,6 +471,27 @@ class StatelessVerifyRepoContextTool(Tool):
         })
 
 
+class StatelessReadCheckSummaryTool(Tool):
+    """Read CI/CD check summary (placeholder)."""
+
+    @property
+    def name(self) -> str: return "read_check_summary"
+    @property
+    def description(self) -> str: return "Read CI/CD check summary (placeholder)"
+    @property
+    def input_schema(self) -> dict[str, Any]:
+        return {"type": "object", "properties": {}}
+    @property
+    def risk_level(self) -> RiskLevel: return RiskLevel.LOW
+    @property
+    def is_read_only(self) -> bool: return True
+    @property
+    def is_concurrency_safe(self) -> bool: return True
+
+    async def call(self, input: dict[str, Any]) -> str:
+        return json.dumps({"status": "unavailable", "reason": "GitHub Checks integration not present"})
+
+
 class StatelessTodoWriteTool(Tool):
     """Stateless todo checkpoint - validates and echoes without mutation."""
 
@@ -504,7 +525,25 @@ def create_stateless_context_tools(
     repo_root: str,
     pr_context: Any,
 ) -> list[Tool]:
-    """Create stateless repo context tools."""
+    """Create stateless repo context tools.
+
+    Args:
+        repo_root: Path to the repository root. Must be a valid directory.
+        pr_context: PR context for diff/patch operations.
+
+    Returns:
+        List of stateless tools.
+
+    Raises:
+        ValueError: If repo_root is empty or not a valid directory.
+    """
+    if not repo_root:
+        raise ValueError("repo_root is required for stateless context tools")
+
+    root_path = Path(repo_root).resolve()
+    if not root_path.is_dir():
+        raise ValueError(f"repo_root is not a valid directory: {repo_root}")
+
     return [
         StatelessTodoWriteTool(),
         StatelessVerifyRepoContextTool(repo_root, pr_context),
@@ -514,4 +553,5 @@ def create_stateless_context_tools(
         StatelessReadRepoFileTool(repo_root),
         StatelessSearchTestsForTool(repo_root),
         StatelessReadRepoManifestTool(repo_root),
+        StatelessReadCheckSummaryTool(),
     ]
