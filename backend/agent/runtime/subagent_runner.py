@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any, Callable, Awaitable
+from typing import Any, Callable, Awaitable, Union
 
 from backend.agent.model.client import ModelClient
 from backend.agent.model.messages import Message, Role
@@ -32,7 +32,7 @@ def build_child_tool_registry(child_tools: list[Tool]) -> ToolRegistry:
     return registry
 
 
-ChildToolFactory = Callable[..., list[Tool]]
+ChildToolFactory = Callable[..., Union[list[Tool], Any]]
 
 
 async def run_subagent(
@@ -88,7 +88,14 @@ def build_subagent_runner(
             )
 
         child_session_id = generate_child_session_id(parent_session_id)
-        all_child_tools = child_tool_factory(child_session_id, task=task)
+        factory_result = child_tool_factory(child_session_id, task=task)
+
+        # Handle ChildToolBundle or plain list[Tool]
+        if isinstance(factory_result, list):
+            all_child_tools = factory_result
+        else:
+            all_child_tools = factory_result.tools
+
         child_registry = build_child_tool_registry(all_child_tools)
         child_tools = filter_tools(child_registry, agent_def)
         effective_max_steps = max_steps if max_steps is not None else agent_def.default_max_steps

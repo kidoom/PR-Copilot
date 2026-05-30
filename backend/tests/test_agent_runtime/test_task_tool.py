@@ -202,3 +202,79 @@ async def test_run_many_requires_non_empty_tasks():
 
     with pytest.raises(TaskToolError):
         await tool.run_many(tasks=[], routes=[])
+
+
+@pytest.mark.asyncio
+async def test_run_many_injects_context_id_from_task_plan():
+    captured_tasks: list[dict | None] = []
+
+    async def capturing_runner(*, prompt: str, agent_type: str, max_steps: int | None = None, task: dict | None = None) -> SubAgentResult:
+        captured_tasks.append(task)
+        return SubAgentResult(output="done", agent_type=agent_type, stopped_by_max_steps=False)
+
+    reg = _make_registry()
+    tool = TaskTool(agent_registry=reg, runner=capturing_runner)
+
+    await tool.run_many(
+        task_plan={
+            "context_id": "ctx_abc",
+            "tasks": [{"task_id": "t1", "task_type": "security_context"}],
+            "routes": [{"task_type": "security_context", "agent_type": "security-context-agent"}],
+        },
+    )
+
+    assert len(captured_tasks) == 1
+    assert captured_tasks[0]["context_id"] == "ctx_abc"
+
+
+@pytest.mark.asyncio
+async def test_run_many_does_not_override_existing_context_id():
+    captured_tasks: list[dict | None] = []
+
+    async def capturing_runner(*, prompt: str, agent_type: str, max_steps: int | None = None, task: dict | None = None) -> SubAgentResult:
+        captured_tasks.append(task)
+        return SubAgentResult(output="done", agent_type=agent_type, stopped_by_max_steps=False)
+
+    reg = _make_registry()
+    tool = TaskTool(agent_registry=reg, runner=capturing_runner)
+
+    await tool.run_many(
+        task_plan={
+            "context_id": "ctx_from_plan",
+            "tasks": [{"task_id": "t1", "task_type": "security_context", "context_id": "ctx_from_task"}],
+            "routes": [{"task_type": "security_context", "agent_type": "security-context-agent"}],
+        },
+    )
+
+    assert captured_tasks[0]["context_id"] == "ctx_from_task"
+
+
+@pytest.mark.asyncio
+async def test_run_many_continues_on_runner_exception():
+    call_count = 0
+
+    async def failing_runner(*, prompt: str, agent_type: str, max_steps: int | None = None, task: dict | None = None) -> SubAgentResult:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RuntimeError("model crashed")
+        return SubAgentResult(output="ok", agent_type=agent_type, stopped_by_max_steps=False)
+
+    reg = _make_registry()
+    tool = TaskTool(agent_registry=reg, runner=failing_runner)
+
+    results = await tool.run_many(
+        tasks=[
+            {"task_id": "t1", "task_type": "security_context"},
+            {"task_id": "t2", "task_type": "test_context"},
+        ],
+        routes=[
+            {"task_type": "security_context", "agent_type": "security-context-agent"},
+            {"task_type": "test_context", "agent_type": "test-context-agent"},
+        ],
+    )
+
+    assert len(results) == 2
+    assert results[0]["status"] == "error"
+    assert "model crashed" in results[0]["error"]
+    assert results[1]["status"] == "ok"

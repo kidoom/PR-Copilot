@@ -130,9 +130,11 @@ class TaskTool:
         routes: list[dict[str, Any]] | None = None,
         max_steps: int | None = None,
     ) -> list[dict[str, Any]]:
+        plan_context_id = ""
         if task_plan is not None:
             tasks = task_plan.get("tasks", tasks)
             routes = task_plan.get("routes", routes)
+            plan_context_id = task_plan.get("context_id", "")
 
         if not isinstance(tasks, list) or not tasks:
             raise TaskToolError("TaskTool requires a non-empty tasks list for batch dispatch.")
@@ -158,6 +160,11 @@ class TaskTool:
             )
             task_max_steps = max_steps if max_steps is not None else route.get("max_steps")
             task_payload = _build_task_payload(raw_task, route)
+
+            # Inject context_id from task_plan if not already present
+            if plan_context_id and "context_id" not in task_payload:
+                task_payload["context_id"] = plan_context_id
+
             prompt = _build_dispatch_prompt(task_payload)
 
             try:
@@ -167,7 +174,7 @@ class TaskTool:
                     agent_type=effective_agent_type,
                     max_steps=task_max_steps,
                 )
-            except TaskToolError as exc:
+            except Exception as exc:
                 results.append({
                     "index": index,
                     "task_id": task_payload.get("task_id", ""),
