@@ -339,14 +339,16 @@ def test_patch_deep_dive_excludes_search_repo():
     route = TASK_ROUTES["patch_deep_dive"]
     assert "search_repo" not in route.allowed_tools
     assert "read_file_patch" in route.allowed_tools
-    assert "finish_context_package" in route.allowed_tools
+    # finish_context_package removed - subagents now output structured JSON
+    assert "finish_context_package" not in route.allowed_tools
 
 
-def test_all_routes_include_todo_write_and_finish():
+def test_all_routes_include_todo_write():
     from backend.domain.review.context_task_planner import TASK_ROUTES
     for tt, route in TASK_ROUTES.items():
         assert "todo_write" in route.allowed_tools, f"{tt} missing todo_write"
-        assert "finish_context_package" in route.allowed_tools, f"{tt} missing finish_context_package"
+        # finish_context_package removed - subagents now output structured JSON
+        assert "finish_context_package" not in route.allowed_tools, f"{tt} should not have finish_context_package"
 
 
 def test_agent_definitions_deny_recursive_tools():
