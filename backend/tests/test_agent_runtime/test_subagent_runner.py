@@ -477,3 +477,106 @@ async def test_runner_passes_none_task_for_direct_delegation():
 
     assert len(captured_tasks) == 1
     assert captured_tasks[0] is None
+
+
+# --- Phase 2: Subagent Message Session Boundary ---
+
+
+@pytest.mark.asyncio
+async def test_subagent_messages_are_standard_role_messages():
+    """Verify subagent creates only standard system/user/assistant/tool messages."""
+    model = FakeModelClient([
+        ModelResponse(content="analysis complete", tool_use_blocks=[], token_usage=TokenUsage(10, 20)),
+    ])
+    agent_def = AgentDefinition(
+        name="security-agent", description="Security review",
+        system_prompt="You are a security reviewer.", default_max_steps=5,
+    )
+
+    result = await run_subagent(
+        model=model,
+        agent_def=agent_def,
+        prompt="Check for vulnerabilities",
+        max_steps=5,
+        child_session_id="child_1",
+        child_tools=[],
+    )
+
+    # Verify message roles are standard
+    messages = model.messages_log[0]
+    assert messages[0].role == Role.SYSTEM
+    assert messages[1].role == Role.USER
+    # Final response would be assistant role
+    assert result.output == "analysis complete"
+
+
+@pytest.mark.asyncio
+async def test_runtime_ids_are_persistence_metadata_not_model_visible():
+    """Verify runtime ids (run_id, context_id, task_id) are not in model messages."""
+    model = FakeModelClient([
+        ModelResponse(content="done", tool_use_blocks=[], token_usage=TokenUsage(5, 10)),
+    ])
+    agent_def = AgentDefinition(
+        name="test-agent", description="Test",
+        system_prompt="You are a test agent.", default_max_steps=5,
+    )
+
+    result = await run_subagent(
+        model=model,
+        agent_def=agent_def,
+        prompt="Review code",
+        max_steps=5,
+        child_session_id="child_1",
+        child_tools=[],
+        run_id="run-123",
+        context_id="ctx-456",
+        task_id="task-789",
+    )
+
+    # Verify runtime ids are in result metadata, not in model messages
+    messages = model.messages_log[0]
+    system_msg = messages[0].content
+    user_msg = messages[1].content
+
+    # Runtime ids should NOT appear in model-visible messages
+    assert "run-123" not in system_msg
+    assert "ctx-456" not in system_msg
+    assert "task-789" not in system_msg
+    assert "run-123" not in user_msg
+    assert "ctx-456" not in user_msg
+    assert "task-789" not in user_msg
+
+    # But they should be in result metadata
+    assert result.child_session_id == "child_1"
+
+
+@pytest.mark.asyncio
+async def test_subagent_initial_messages_include_role_and_task():
+    """Verify initial messages include role prompt and delegated task prompt."""
+    model = FakeModelClient([
+        ModelResponse(content="done", tool_use_blocks=[], token_usage=TokenUsage(5, 10)),
+    ])
+    agent_def = AgentDefinition(
+        name="security-agent", description="Security review",
+        system_prompt="You are a security reviewer. Check for vulnerabilities.",
+        default_max_steps=5,
+    )
+
+    await run_subagent(
+        model=model,
+        agent_def=agent_def,
+        prompt="Review the authentication module for security issues",
+        max_steps=5,
+        child_session_id="child_1",
+        child_tools=[],
+    )
+
+    messages = model.messages_log[0]
+
+    # First message should be system with role prompt
+    assert messages[0].role == Role.SYSTEM
+    assert "security reviewer" in messages[0].content.lower()
+
+    # Second message should be user with task prompt
+    assert messages[1].role == Role.USER
+    assert "authentication module" in messages[1].content.lower()
