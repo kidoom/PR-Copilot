@@ -1,8 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.pr_context.routes import router as pr_context_router
-from backend.review_pipeline.routes import router as review_pipeline_router
+from backend.api.routes.pr_context import router as pr_context_router
+from backend.api.routes.review import router as review_pipeline_router
 
 app = FastAPI(title="PR Copilot", version="0.1.0")
 

@@ -1,5 +1,5 @@
-from backend.agent_runtime.runtime.results import AgentResult, ToolExecutionResult
-from backend.agent_runtime.runtime.trace import FinalStep, ThinkStep
+from backend.agent.runtime.results import AgentResult, ToolExecutionResult
+from backend.agent.runtime.trace import FinalStep, ThinkStep
 
 
 def test_tool_execution_result_defaults():

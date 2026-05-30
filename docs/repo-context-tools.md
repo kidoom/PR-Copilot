@@ -5,14 +5,14 @@
 ## 架构位置
 
 ```
-backend/agent_runtime/tool/
+backend/agent/tools/
 ├── protocol.py          # Tool ABC
 ├── registry.py          # ToolRegistry
 └── repo_context/        # RepoContext Lite 工具实现
     ├── models.py        # 数据模型
     ├── policy.py        # 安全策略
-    ├── tools.py         # 工具函数
-    └── registrations.py # Tool 类包装器
+    ├── service.py       # 纯业务函数（原 tools.py）
+    └── tool_defs.py     # Tool 类包装器（原 registrations.py）
 ```
 
 ## 工具列表
@@ -119,10 +119,10 @@ class ContextFinding:
 ## 使用示例
 
 ```python
-from backend.agent_runtime.tool.repo_context import (
+from backend.agent.tools.repo_context import (
     RepoContextSession, TaskBudget, create_context_tools,
 )
-from backend.agent_runtime.tool.registry import ToolRegistry
+from backend.agent.tools.registry import ToolRegistry
 
 # 创建 session
 session = RepoContextSession(
@@ -146,3 +146,36 @@ await registry.resolve("verify_repo_context").call({
 # 然后搜索
 result = await registry.resolve("search_repo").call({"query": "authenticate"})
 ```
+
+## 审查约束与回归要求
+
+RepoContext Lite 是给 SubAgent 使用的读工具组，安全边界要比普通 helper 更硬。后续改动必须守住以下约束：
+
+1. `verify_repo_context` 必须 fail closed。
+   - 可信的 `owner/repo/head_sha` 应来自服务端绑定的 `PRContext` 或 session。
+   - `workspace_root` 不应由模型自由切换到任意本地目录。
+   - remote origin 或 HEAD 无法确认时，不应标记为 verified。
+
+2. 所有会返回仓库内容片段的工具必须过滤敏感文件。
+   - `read_repo_file` 和 `search_repo` 都要使用 `is_sensitive_file`。
+   - `.env`、private key、credential、secret 文件不能以 snippet 形式返回。
+
+3. diff 工具必须基于真实 `HunkLine` 结构。
+   - `HunkLine` 字段是 `type`、`content`、`old_line`、`new_line`。
+   - `read_file_patch` 和 `search_diff` 的测试必须用 `parse_patch` 生成的真实对象。
+
+4. budget 是硬限制。
+   - `max_searches`、`max_files`、`max_tokens` 都必须在返回内容前检查。
+   - token 超预算时应拒绝、截断或缩小读取范围，不能只做事后统计。
+
+5. `path_scope` 必须做安全路径解析。
+   - scope 也要经过 `resolve_safe_path`。
+   - 用路径包含关系判断，不用字符串 `startswith`。
+   - `src` 不应匹配 `src2`，指定 scope 时不应搜索无关根目录文件。
+
+6. 必须补充回归测试。
+   - 真实 patch 可读可搜。
+   - `.env` 不会被 `search_repo` 返回。
+   - owner/repo/head_sha 不匹配时验证失败。
+   - token budget 超限会返回错误。
+   - `path_scope=src` 不搜索 `src2`。

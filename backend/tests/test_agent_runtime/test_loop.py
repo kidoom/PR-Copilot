@@ -3,11 +3,11 @@ from __future__ import annotations
 import pytest
 from typing import Any
 
-from backend.agent_runtime.model.messages import Message, ModelResponse, Role, TokenUsage, ToolUseBlock
-from backend.agent_runtime.model.client import ModelClient
-from backend.agent_runtime.runtime.loop import run_loop
-from backend.agent_runtime.tool.registry import ToolRegistry
-from backend.agent_runtime.tool.protocol import RiskLevel, Tool
+from backend.agent.model.messages import Message, ModelResponse, Role, TokenUsage, ToolUseBlock
+from backend.agent.model.client import ModelClient
+from backend.agent.runtime.loop import run_loop
+from backend.agent.tools.registry import ToolRegistry
+from backend.agent.tools.protocol import RiskLevel, Tool, ToolSchema
 
 
 class FakeModelClient(ModelClient):
@@ -15,7 +15,7 @@ class FakeModelClient(ModelClient):
         self._responses = list(responses)
         self._call_count = 0
 
-    async def chat(self, messages: list[Message]) -> ModelResponse:
+    async def chat(self, messages: list[Message], tool_schemas: list[ToolSchema] | None = None) -> ModelResponse:
         resp = self._responses[self._call_count]
         self._call_count += 1
         return resp
@@ -127,9 +127,11 @@ class CapturingModelClient(ModelClient):
         self._responses = list(responses)
         self._call_count = 0
         self.captured_messages: list[list[Message]] = []
+        self.captured_schemas: list[list[ToolSchema] | None] = []
 
-    async def chat(self, messages: list[Message]) -> ModelResponse:
+    async def chat(self, messages: list[Message], tool_schemas: list[ToolSchema] | None = None) -> ModelResponse:
         self.captured_messages.append(list(messages))
+        self.captured_schemas.append(tool_schemas)
         resp = self._responses[self._call_count]
         self._call_count += 1
         return resp
@@ -150,3 +152,25 @@ async def test_assistant_message_includes_tool_use_blocks():
     last_assistant = assistant_msgs[-1]
     assert isinstance(last_assistant.content, list)
     assert any(isinstance(b, ToolUseBlock) and b.tool_use_id == "u1" for b in last_assistant.content)
+
+
+@pytest.mark.asyncio
+async def test_model_receives_tool_schemas_from_registry():
+    model = CapturingModelClient([ModelResponse(content="done", tool_use_blocks=[])])
+    reg = ToolRegistry()
+    reg.register(EchoTool())
+    await run_loop(model=model, tool_registry=reg, messages=[Message(role=Role.USER, content="test")])
+    schemas = model.captured_schemas[0]
+    assert schemas is not None
+    assert len(schemas) == 1
+    assert schemas[0].name == "echo"
+
+
+@pytest.mark.asyncio
+async def test_empty_registry_passes_empty_schemas():
+    model = CapturingModelClient([ModelResponse(content="done", tool_use_blocks=[])])
+    reg = ToolRegistry()
+    await run_loop(model=model, tool_registry=reg, messages=[Message(role=Role.USER, content="test")])
+    schemas = model.captured_schemas[0]
+    assert schemas is not None
+    assert len(schemas) == 0

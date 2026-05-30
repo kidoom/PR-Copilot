@@ -6,10 +6,10 @@ from typing import Any
 
 import httpx
 
-from backend.agent_runtime.model.config import ModelConfig
-from backend.agent_runtime.model.messages import Message, Role, ToolUseBlock, ToolResultBlock
-from backend.agent_runtime.model.openai_client import OpenAIModelClient, build_tools_param, _convert_message, _parse_response
-from backend.agent_runtime.tool.protocol import ToolSchema
+from backend.agent.model.config import ModelConfig
+from backend.agent.model.messages import Message, Role, ToolUseBlock, ToolResultBlock
+from backend.agent.model.openai_client import OpenAIModelClient, build_tools_param, _convert_message, _parse_response
+from backend.agent.tools.protocol import ToolSchema
 
 
 def _make_config(**overrides) -> ModelConfig:
