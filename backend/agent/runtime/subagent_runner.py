@@ -42,6 +42,31 @@ def build_child_tool_registry(child_tools: list[Tool]) -> ToolRegistry:
     return registry
 
 
+def _message_to_payload(msg: Message) -> dict[str, Any]:
+    """Convert a Message to a serializable payload."""
+    content = msg.content
+    if isinstance(content, list):
+        blocks = []
+        for block in content:
+            if hasattr(block, "tool_use_id") and hasattr(block, "name"):
+                blocks.append({
+                    "tool_use_id": block.tool_use_id,
+                    "name": block.name,
+                    "input": block.input,
+                })
+            elif hasattr(block, "tool_use_id"):
+                blocks.append({
+                    "tool_use_id": block.tool_use_id,
+                    "content": block.content,
+                    "is_error": block.is_error,
+                })
+        content = blocks
+    return {
+        "role": msg.role.value,
+        "content": content,
+    }
+
+
 ChildToolFactory = Callable[..., Union[list[Tool], Any]]
 
 
@@ -76,32 +101,29 @@ async def run_subagent(
 
         # Append initial messages
         for msg in build_child_messages(agent_def, prompt):
-            append_message(memory_store, subagent_session_id, {
-                "role": msg.role.value,
-                "content": msg.content if isinstance(msg.content, str) else str(msg.content),
-            })
+            append_message(memory_store, subagent_session_id, _message_to_payload(msg))
 
     messages = build_child_messages(agent_def, prompt)
     tool_registry = build_child_tool_registry(child_tools)
+
+    # Define callback to persist each message during run_loop
+    def on_message(msg: Message) -> None:
+        if memory_store and subagent_session_id:
+            append_message(memory_store, subagent_session_id, _message_to_payload(msg))
 
     result: AgentResult = await run_loop(
         model=model,
         tool_registry=tool_registry,
         messages=messages,
         max_steps=max_steps,
+        on_message=on_message if memory_store and subagent_session_id else None,
     )
-
-    # Append result to memory
-    if memory_store and subagent_session_id:
-        append_message(memory_store, subagent_session_id, {
-            "role": "assistant",
-            "content": result.output,
-        })
 
     return SubAgentResult(
         output=result.output,
         agent_type=agent_def.name,
         child_session_id=child_session_id,
+        memory_session_id=subagent_session_id,
         steps=result.steps,
         token_usage=result.token_usage,
         stopped_by_max_steps=result.stopped_by_max_steps,

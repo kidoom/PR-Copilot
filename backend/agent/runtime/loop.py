@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+from typing import Callable
+
 from backend.agent.model.messages import Message, ModelResponse, Role, TokenUsage, ToolResultBlock, ToolUseBlock
 from backend.agent.runtime.trace import ThinkStep, CallStep, ObserveStep, FinalStep, AgentStep
 from backend.agent.runtime.results import AgentResult, ToolExecutionResult
 from backend.agent.tools.protocol import Tool, ToolConsentFn
 from backend.agent.tools.registry import ToolRegistry
 from backend.agent.model.client import ModelClient
+
+
+# Callback type for message persistence
+MessageCallback = Callable[[Message], None]
 
 
 async def run_loop(
@@ -15,6 +21,7 @@ async def run_loop(
     messages: list[Message],
     max_steps: int = 10,
     tool_consent: ToolConsentFn | None = None,
+    on_message: MessageCallback | None = None,
 ) -> AgentResult:
     steps: list[AgentStep] = []
     total_usage = TokenUsage()
@@ -31,6 +38,9 @@ async def run_loop(
 
         if not response.tool_use_blocks:
             steps.append(FinalStep(output=response.content))
+            final_msg = Message(role=Role.ASSISTANT, content=response.content)
+            if on_message:
+                on_message(final_msg)
             return AgentResult(
                 output=response.content,
                 steps=steps,
@@ -42,7 +52,10 @@ async def run_loop(
         assistant_content: str | list[ToolUseBlock] = response.content
         if response.tool_use_blocks:
             assistant_content = list(response.tool_use_blocks)
-        messages.append(Message(role=Role.ASSISTANT, content=assistant_content))
+        assistant_msg = Message(role=Role.ASSISTANT, content=assistant_content)
+        messages.append(assistant_msg)
+        if on_message:
+            on_message(assistant_msg)
 
         for block in response.tool_use_blocks:
             steps.append(CallStep(
@@ -59,14 +72,17 @@ async def run_loop(
                     output=error_output,
                     is_error=True,
                 ))
-                messages.append(Message(
+                tool_msg = Message(
                     role=Role.TOOL,
                     content=[ToolResultBlock(
                         tool_use_id=block.tool_use_id,
                         content=error_output,
                         is_error=True,
                     )],
-                ))
+                )
+                messages.append(tool_msg)
+                if on_message:
+                    on_message(tool_msg)
                 continue
 
             if tool.requires_consent and tool_consent is not None:
@@ -78,14 +94,17 @@ async def run_loop(
                         output=consent_output,
                         is_error=True,
                     ))
-                    messages.append(Message(
+                    consent_msg = Message(
                         role=Role.TOOL,
                         content=[ToolResultBlock(
                             tool_use_id=block.tool_use_id,
                             content=consent_output,
                             is_error=True,
                         )],
-                    ))
+                    )
+                    messages.append(consent_msg)
+                    if on_message:
+                        on_message(consent_msg)
                     continue
 
             try:
@@ -100,14 +119,17 @@ async def run_loop(
                 output=result,
                 is_error=is_error,
             ))
-            messages.append(Message(
+            tool_msg = Message(
                 role=Role.TOOL,
                 content=[ToolResultBlock(
                     tool_use_id=block.tool_use_id,
                     content=result,
                     is_error=is_error,
                 )],
-            ))
+            )
+            messages.append(tool_msg)
+            if on_message:
+                on_message(tool_msg)
 
     return AgentResult(
         output="Agent stopped: max steps reached without final answer.",

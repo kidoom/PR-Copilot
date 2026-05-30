@@ -11,6 +11,7 @@ class SubAgentResult:
     output: str
     agent_type: str
     child_session_id: str = ""
+    memory_session_id: str = ""  # Memory session ID for transcript lookup
     steps: list[AgentStep] = field(default_factory=list)
     token_usage: TokenUsage = field(default_factory=TokenUsage)
     stopped_by_max_steps: bool = False
