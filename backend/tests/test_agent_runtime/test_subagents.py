@@ -4,6 +4,7 @@ import os
 from backend.agent.subagents import build_default_subagent_registry, build_context_child_tools, ChildToolBundle, _PROMPT_MAP, _AGENT_ALLOWED_TOOLS
 from backend.domain.review.context_task_planner import TASK_ROUTES, AGENT_DEFINITIONS
 from backend.agent.tools.repo_context.models import RepoContextSession
+from backend.agent.tools.repo_context.policy import parse_task_budget
 
 
 @pytest.fixture
@@ -139,16 +140,14 @@ class TestPerTaskSessionBinding:
         assert bundle.session.task_id == "child_xyz"
 
     def test_session_budget_from_task(self, temp_repo):
-        # Budget is no longer customizable per-task in stateless mode
         bundle = build_context_child_tools(
             "child_1",
-            task={"task_id": "t1"},
+            task={"task_id": "t1", "budget": {"max_searches": 2, "max_files": 3, "max_tokens": 400}},
             repo_root=temp_repo,
         )
-        # Uses default budget
-        assert bundle.session.budget.max_searches == 5
-        assert bundle.session.budget.max_files == 10
-        assert bundle.session.budget.max_tokens == 3000
+        assert bundle.session.budget.max_searches == 2
+        assert bundle.session.budget.max_files == 3
+        assert bundle.session.budget.max_tokens == 400
 
     def test_session_default_budget(self, temp_repo):
         bundle = build_context_child_tools("child_1", repo_root=temp_repo)
@@ -166,9 +165,19 @@ class TestPerTaskSessionBinding:
         assert bundle_a.session is not bundle_b.session
         assert bundle_a.session.task_id == "task_a"
         assert bundle_b.session.task_id == "task_b"
-        # Both use default budget in stateless mode
+        # Both use independent default budgets
         assert bundle_a.session.budget.max_searches == 5
         assert bundle_b.session.budget.max_searches == 5
+
+    def test_parse_task_budget_rejects_invalid_values(self):
+        budget = parse_task_budget({
+            "max_searches": "bad",
+            "max_files": 0,
+            "max_tokens": -1,
+        })
+        assert budget.max_searches == 5
+        assert budget.max_files == 10
+        assert budget.max_tokens == 3000
 
     def test_sibling_todos_are_isolated(self, temp_repo):
         bundle_a = build_context_child_tools("child_a", task={"task_id": "t_a"}, context_id="ctx_1", repo_root=temp_repo)

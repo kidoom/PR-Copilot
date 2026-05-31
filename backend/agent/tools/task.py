@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, Callable, Awaitable
 
@@ -24,11 +25,13 @@ class TaskTool:
         runner: Runner,
         agent_registry: AgentRegistry | None = None,
         agent_types: list[str] | None = None,
+        max_concurrent_tasks: int = 4,
     ) -> None:
         self._runner = runner
         self._agent_types = agent_types or (agent_registry.names() if agent_registry is not None else ["default"])
         if not self._agent_types:
             self._agent_types = ["default"]
+        self._max_concurrent_tasks = max(1, int(max_concurrent_tasks))
 
     @property
     def name(self) -> str:
@@ -83,6 +86,10 @@ class TaskTool:
 
     @property
     def is_concurrency_safe(self) -> bool:
+        return False
+
+    @property
+    def requires_consent(self) -> bool:
         return False
 
     async def call(self, input: dict[str, Any]) -> str:
@@ -151,73 +158,82 @@ class TaskTool:
             raise TaskToolError("TaskTool requires a non-empty tasks list for batch dispatch.")
 
         route_index = _build_route_index(routes or [])
-        results: list[dict[str, Any]] = []
+        results: list[dict[str, Any] | None] = [None] * len(tasks)
+        semaphore = asyncio.Semaphore(self._max_concurrent_tasks)
 
-        for index, raw_task in enumerate(tasks):
-            if not isinstance(raw_task, dict):
-                results.append({
-                    "index": index,
-                    "status": "error",
-                    "error": "Task entry must be an object.",
-                })
-                continue
-
-            route = _resolve_route(raw_task, route_index)
-            effective_agent_type = (
-                raw_task.get("agent_type")
-                or route.get("agent_type")
-                or _agent_type_from_task_type(raw_task.get("task_type", ""))
-                or self._agent_types[0]
-            )
-            task_max_steps = max_steps if max_steps is not None else route.get("max_steps")
-            task_payload = _build_task_payload(raw_task, route)
-
-            # Inject context_id from task_plan if not already present
-            if plan_context_id and "context_id" not in task_payload:
-                task_payload["context_id"] = plan_context_id
-
-            prompt = _build_dispatch_prompt(task_payload)
-
-            try:
-                result = await self.run(
-                    prompt=prompt,
-                    task=task_payload,
-                    agent_type=effective_agent_type,
-                    max_steps=task_max_steps,
+        async def _dispatch_one(index: int, raw_task: dict[str, Any]) -> None:
+            async with semaphore:
+                route = _resolve_route(raw_task, route_index)
+                effective_agent_type = (
+                    raw_task.get("agent_type")
+                    or route.get("agent_type")
+                    or _agent_type_from_task_type(raw_task.get("task_type", ""))
+                    or self._agent_types[0]
                 )
-            except Exception as exc:
-                results.append({
+                task_max_steps = max_steps if max_steps is not None else route.get("max_steps")
+                task_payload = _build_task_payload(raw_task, route)
+
+                # Inject context_id from task_plan if not already present
+                if plan_context_id and "context_id" not in task_payload:
+                    task_payload["context_id"] = plan_context_id
+
+                prompt = _build_dispatch_prompt(task_payload)
+
+                try:
+                    result = await self.run(
+                        prompt=prompt,
+                        task=task_payload,
+                        agent_type=effective_agent_type,
+                        max_steps=task_max_steps,
+                    )
+                except Exception as exc:
+                    results[index] = {
+                        "index": index,
+                        "task_id": task_payload.get("task_id", ""),
+                        "task_type": task_payload.get("task_type", ""),
+                        "agent_type": effective_agent_type,
+                        "status": "error",
+                        "error": str(exc),
+                    }
+                    return
+
+                # Parse and validate structured review result
+                parsed = parse_review_result(result.output)
+                validation_errors = validate_review_result(parsed) if parsed else ["Failed to parse JSON"]
+                is_valid = parsed is not None and len(validation_errors) == 0
+
+                results[index] = {
                     "index": index,
                     "task_id": task_payload.get("task_id", ""),
                     "task_type": task_payload.get("task_type", ""),
-                    "agent_type": effective_agent_type,
+                    "agent_type": result.agent_type,
+                    "child_session_id": result.child_session_id,
+                    "memory_session_id": result.memory_session_id,
+                    "steps": len(result.steps),
+                    "stopped_by_max_steps": result.stopped_by_max_steps,
+                    "status": "ok" if is_valid else "invalid",
+                    "output": result.output,
+                    "parsed_result": parsed.to_dict() if parsed else None,
+                    "parse_status": "valid" if is_valid else "invalid",
+                    "validation_errors": validation_errors if not is_valid else [],
+                }
+
+        pending: list[Awaitable[None]] = []
+
+        for index, raw_task in enumerate(tasks):
+            if not isinstance(raw_task, dict):
+                results[index] = {
+                    "index": index,
                     "status": "error",
-                    "error": str(exc),
-                })
+                    "error": "Task entry must be an object.",
+                }
                 continue
+            pending.append(_dispatch_one(index, raw_task))
 
-            # Parse and validate structured review result
-            parsed = parse_review_result(result.output)
-            validation_errors = validate_review_result(parsed) if parsed else ["Failed to parse JSON"]
-            is_valid = parsed is not None and len(validation_errors) == 0
+        if pending:
+            await asyncio.gather(*pending)
 
-            results.append({
-                "index": index,
-                "task_id": task_payload.get("task_id", ""),
-                "task_type": task_payload.get("task_type", ""),
-                "agent_type": result.agent_type,
-                "child_session_id": result.child_session_id,
-                "memory_session_id": result.memory_session_id,
-                "steps": len(result.steps),
-                "stopped_by_max_steps": result.stopped_by_max_steps,
-                "status": "ok" if is_valid else "invalid",
-                "output": result.output,
-                "parsed_result": parsed.to_dict() if parsed else None,
-                "parse_status": "valid" if is_valid else "invalid",
-                "validation_errors": validation_errors if not is_valid else [],
-            })
-
-        return results
+        return [r for r in results if r is not None]
 
     async def run(
         self,

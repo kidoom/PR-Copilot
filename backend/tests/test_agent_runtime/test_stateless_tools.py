@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from unittest.mock import Mock, patch
 
 from backend.agent.tools.repo_context.stateless_tools import (
     StatelessReadFilePatchTool,
@@ -20,6 +21,13 @@ from backend.agent.tools.repo_context.stateless_tools import (
     StatelessTodoWriteTool,
     create_stateless_context_tools,
 )
+from backend.agent.tools.repo_context.models import (
+    RepoContextSession,
+    RepoVerificationState,
+    TaskBudget,
+    VerificationStatus,
+)
+from backend.agent.tools.repo_context.provider.models import PRIdentity
 
 
 class MockPRFile:
@@ -46,6 +54,24 @@ class MockLine:
 class MockPRContext:
     def __init__(self, files):
         self.files = files
+        self.owner = "owner"
+        self.repo = "repo"
+        self.commits = type("Commits", (), {"head_sha": ""})()
+
+
+def _verified_session(repo_root: str, budget: TaskBudget | None = None) -> RepoContextSession:
+    session = RepoContextSession(
+        context_id="ctx",
+        task_id="task",
+        repo_root=repo_root,
+        budget=budget or TaskBudget(),
+    )
+    session.verification = RepoVerificationState(
+        status=VerificationStatus.VERIFIED,
+        owner="owner",
+        repo="repo",
+    )
+    return session
 
 
 @pytest.fixture
@@ -147,6 +173,22 @@ class TestStatelessSearchRepo:
         env_matches = [m for m in result["matches"] if ".env" in m["file"]]
         assert len(env_matches) == 0
 
+    @pytest.mark.asyncio
+    async def test_search_budget_exhausted_with_session(self, temp_repo):
+        session = _verified_session(temp_repo, TaskBudget(max_searches=1))
+        tool = StatelessSearchRepoTool(temp_repo, session=session)
+        first = json.loads(await tool.call({"query": "def main"}))
+        second = json.loads(await tool.call({"query": "def main"}))
+        assert "matches" in first
+        assert "budget" in second["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_search_requires_verification_with_session(self, temp_repo):
+        session = RepoContextSession(context_id="ctx", task_id="task", repo_root=temp_repo)
+        tool = StatelessSearchRepoTool(temp_repo, session=session)
+        result = json.loads(await tool.call({"query": "def main"}))
+        assert "not verified" in result["error"].lower()
+
 
 class TestStatelessReadRepoFile:
     @pytest.mark.asyncio
@@ -178,6 +220,22 @@ class TestStatelessReadRepoFile:
         result = json.loads(await tool.call({"path": "private_key.pem"}))
         assert "error" in result
 
+    @pytest.mark.asyncio
+    async def test_read_file_budget_exhausted_with_session(self, temp_repo):
+        session = _verified_session(temp_repo, TaskBudget(max_files=1))
+        tool = StatelessReadRepoFileTool(temp_repo, session=session)
+        first = json.loads(await tool.call({"path": "src/main.py"}))
+        second = json.loads(await tool.call({"path": "src/main.py"}))
+        assert "lines" in first
+        assert "budget" in second["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_read_file_token_budget_exceeded_with_session(self, temp_repo):
+        session = _verified_session(temp_repo, TaskBudget(max_tokens=1))
+        tool = StatelessReadRepoFileTool(temp_repo, session=session)
+        result = json.loads(await tool.call({"path": "src/main.py"}))
+        assert "token budget" in result["error"].lower()
+
 
 class TestStatelessSearchTestsFor:
     @pytest.mark.asyncio
@@ -191,6 +249,14 @@ class TestStatelessSearchTestsFor:
         assert result["total"] > 0
         assert "test_main.py" in result["candidates"][0]["file"]
 
+    @pytest.mark.asyncio
+    async def test_search_tests_budget_exhausted_with_session(self, temp_repo):
+        session = _verified_session(temp_repo, TaskBudget(max_searches=1))
+        tool = StatelessSearchTestsForTool(temp_repo, session=session)
+        await tool.call({"source_file": "src/main.py"})
+        result = json.loads(await tool.call({"source_file": "src/main.py"}))
+        assert "budget" in result["error"].lower()
+
 
 class TestStatelessReadRepoManifest:
     @pytest.mark.asyncio
@@ -201,6 +267,53 @@ class TestStatelessReadRepoManifest:
         # Should find README.md and package.json
         assert "readme" in result["manifests"]
         assert "dependencies" in result["manifests"]
+
+    @pytest.mark.asyncio
+    async def test_manifest_uses_file_read_budget_with_session(self, temp_repo):
+        session = _verified_session(temp_repo, TaskBudget(max_files=1))
+        tool = StatelessReadRepoManifestTool(temp_repo, session=session)
+        result = json.loads(await tool.call({}))
+        assert "manifests" in result
+        assert session.usage.file_read_count == 1
+        second = json.loads(await tool.call({}))
+        assert "budget" in second["error"].lower()
+
+
+class TestStatelessVerifyRepoContext:
+    @pytest.mark.asyncio
+    async def test_verify_uses_bound_identity_over_model_input(self, temp_repo):
+        os.makedirs(os.path.join(temp_repo, ".git"))
+        session = RepoContextSession(context_id="ctx", task_id="task", repo_root=temp_repo)
+        trusted = PRIdentity(owner="trusted-owner", repo="trusted-repo", head_sha="abc123")
+        tool = StatelessVerifyRepoContextTool(
+            temp_repo,
+            session=session,
+            trusted_identity=trusted,
+        )
+
+        def fake_run(args, **kwargs):
+            if args[:3] == ["git", "remote", "get-url"]:
+                return Mock(returncode=0, stdout="git@github.com:trusted-owner/trusted-repo.git")
+            if args[:3] == ["git", "rev-parse", "HEAD"]:
+                return Mock(returncode=0, stdout="abc123ffff")
+            return Mock(returncode=1, stdout="")
+
+        with patch("subprocess.run", side_effect=fake_run):
+            result = json.loads(await tool.call({
+                "owner": "attacker",
+                "repo": "wrong-repo",
+                "head_sha": "deadbeef",
+            }))
+
+        assert result["verified"] is True
+        assert result["owner"] == "trusted-owner"
+        assert result["repo"] == "trusted-repo"
+        assert session.verification.status == VerificationStatus.VERIFIED
+
+    @pytest.mark.asyncio
+    async def test_verify_schema_does_not_require_identity_input(self, temp_repo):
+        tool = StatelessVerifyRepoContextTool(temp_repo)
+        assert "required" not in tool.input_schema
 
 
 class TestStatelessTodoWrite:

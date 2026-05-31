@@ -8,6 +8,8 @@ from backend.agent.runtime.events import (
     RUN_COMPLETED,
     RUN_FAILED,
     RUN_STARTED,
+    TOOL_CALL,
+    TOOL_RESULT,
     RunEvent,
 )
 from backend.agent.runtime.loop import run_loop
@@ -21,6 +23,25 @@ from backend.agent.runtime.memory import (
 from backend.agent.runtime.memory.store import FileMemoryStore
 from backend.agent.runtime.run_manager import RunManager
 from backend.deps import AgentDeps
+
+
+def _summarize_value(value: Any, *, max_chars: int = 500) -> Any:
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return value if len(value) <= max_chars else value[:max_chars] + "...[truncated]"
+    if isinstance(value, list):
+        return [_summarize_value(v, max_chars=max_chars // 2) for v in value[:10]]
+    if isinstance(value, dict):
+        summarized: dict[str, Any] = {}
+        for index, (key, item) in enumerate(value.items()):
+            if index >= 20:
+                summarized["..."] = "truncated"
+                break
+            summarized[str(key)] = _summarize_value(item, max_chars=max_chars // 2)
+        return summarized
+    text = str(value)
+    return text if len(text) <= max_chars else text[:max_chars] + "...[truncated]"
 
 
 def _message_to_payload(msg: Message) -> dict[str, Any]:
@@ -73,6 +94,14 @@ async def run_main_agent(
             event_sink(event)
         return event
 
+    def _emit_runtime_event(event_type: str, payload: dict[str, Any]) -> None:
+        event_payload = dict(payload)
+        if "input" in event_payload:
+            event_payload["input_summary"] = _summarize_value(event_payload.pop("input"))
+        if "output" in event_payload:
+            event_payload["output_summary"] = _summarize_value(event_payload.pop("output"))
+        _emit(event_type, event_payload)
+
     # Create main memory session
     memory_store: FileMemoryStore = deps.memory_store
     session_id = build_main_session_id(run_id, context_id)
@@ -108,6 +137,7 @@ async def run_main_agent(
             workspace_manager=workspace_manager,
             pr_identity=pr_identity,
             token=token,
+            on_runtime_event=_emit_runtime_event,
         )
 
         # Append initial messages to memory
@@ -131,6 +161,10 @@ async def run_main_agent(
             messages=messages,
             max_steps=max_steps,
             on_message=on_message,
+            on_tool_call=lambda payload: _emit_runtime_event(TOOL_CALL, payload),
+            on_tool_result=lambda payload: _emit_runtime_event(TOOL_RESULT, payload),
+            agent_kind="main",
+            agent_type="main-agent",
             # Compression parameters
             session_id=session_id,
             memory_store=memory_store,

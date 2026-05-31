@@ -3,11 +3,13 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
+from typing import Any
 
 from backend.agent.tools.repo_context.models import (
     IGNORED_DIRECTORIES,
     SENSITIVE_FILE_PATTERNS,
     RepoContextSession,
+    TaskBudget,
     VerificationStatus,
 )
 
@@ -63,6 +65,27 @@ def check_budget_tokens(session: RepoContextSession, estimated_tokens: int) -> b
 
 def consume_token_budget(session: RepoContextSession, tokens: int) -> None:
     session.usage.approximate_tokens += tokens
+
+
+def parse_task_budget(raw_budget: Any) -> TaskBudget:
+    """Build a safe task budget from a planner payload."""
+    default = TaskBudget()
+    if not isinstance(raw_budget, dict):
+        return default
+
+    def _positive_int(key: str, fallback: int) -> int:
+        value = raw_budget.get(key, fallback)
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return fallback
+        return parsed if parsed > 0 else fallback
+
+    return TaskBudget(
+        max_searches=_positive_int("max_searches", default.max_searches),
+        max_files=_positive_int("max_files", default.max_files),
+        max_tokens=_positive_int("max_tokens", default.max_tokens),
+    )
 
 
 def is_verified(session: RepoContextSession) -> bool:

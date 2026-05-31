@@ -5,7 +5,8 @@ from typing import Any
 
 from backend.agent.runtime.agent_def import AgentDefinition, AgentRegistry
 from backend.agent.tools.protocol import Tool
-from backend.agent.tools.repo_context.models import RepoContextSession, TaskBudget
+from backend.agent.tools.repo_context.models import RepoContextSession
+from backend.agent.tools.repo_context.policy import parse_task_budget
 
 
 @dataclass
@@ -208,6 +209,7 @@ def build_context_child_tools(
     repo_root: str = "",
     pr_context: Any = None,
     provider: Any = None,
+    pr_identity: Any = None,
 ) -> ChildToolBundle:
     """Build stateless read-only tools for a child subagent session.
 
@@ -230,8 +232,14 @@ def build_context_child_tools(
             context_id=context_id or child_session_id,
             task_id=(task or {}).get("task_id", child_session_id),
             repo_root=provider.repo_root,
+            budget=parse_task_budget((task or {}).get("budget")),
         )
-        tools = create_provider_backed_context_tools(provider, pr_context)
+        tools = create_provider_backed_context_tools(
+            provider,
+            pr_context,
+            session=session,
+            trusted_identity=pr_identity,
+        )
         return ChildToolBundle(session=session, tools=tools)
 
     if not repo_root:
@@ -245,7 +253,13 @@ def build_context_child_tools(
         context_id=context_id or child_session_id,
         task_id=(task or {}).get("task_id", child_session_id),
         repo_root=repo_root,
+        budget=parse_task_budget((task or {}).get("budget")),
     )
 
-    tools = create_stateless_context_tools(repo_root, pr_context)
+    tools = create_stateless_context_tools(
+        repo_root,
+        pr_context,
+        session=session,
+        trusted_identity=pr_identity,
+    )
     return ChildToolBundle(session=session, tools=tools)
