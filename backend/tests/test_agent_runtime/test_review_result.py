@@ -14,6 +14,10 @@ from backend.agent.runtime.review_result import (
 )
 
 
+def _evidence() -> list[EvidenceRef]:
+    return [EvidenceRef(file="test.py", line=1, snippet="code", source="diff")]
+
+
 class TestReviewResult:
     def test_create_review_result(self):
         result = ReviewResult(
@@ -39,7 +43,7 @@ class TestReviewResult:
         result = ReviewResult(
             status=ReviewStatus.SUCCESS,
             summary="Test summary",
-            findings=[Finding(claim="Test claim", confidence=0.8, severity="medium")],
+            findings=[Finding(claim="Test claim", confidence=0.8, severity="medium", evidence=_evidence())],
         )
 
         d = result.to_dict()
@@ -73,7 +77,7 @@ class TestReviewResult:
         original = ReviewResult(
             status=ReviewStatus.PARTIAL,
             summary="Partial review",
-            findings=[Finding(claim="Test", confidence=0.5, severity="low")],
+            findings=[Finding(claim="Test", confidence=0.5, severity="low", evidence=_evidence())],
             uncertainties=["Missing data"],
         )
 
@@ -163,7 +167,7 @@ class TestValidateReviewResult:
         result = ReviewResult(
             status=ReviewStatus.SUCCESS,
             summary="Test",
-            findings=[Finding(claim="Test", confidence=1.5, severity="medium")],
+            findings=[Finding(claim="Test", confidence=1.5, severity="medium", evidence=_evidence())],
         )
         errors = validate_review_result(result)
         assert any("confidence" in e for e in errors)
@@ -172,7 +176,54 @@ class TestValidateReviewResult:
         result = ReviewResult(
             status=ReviewStatus.SUCCESS,
             summary="Test",
-            findings=[Finding(claim="Test", confidence=0.5, severity="invalid")],
+            findings=[Finding(claim="Test", confidence=0.5, severity="invalid", evidence=_evidence())],
         )
         errors = validate_review_result(result)
         assert any("severity" in e for e in errors)
+
+    def test_finding_without_evidence_invalid(self):
+        result = ReviewResult(
+            status=ReviewStatus.SUCCESS,
+            summary="Test",
+            findings=[Finding(claim="Unsupported claim", confidence=0.5, severity="medium")],
+        )
+        errors = validate_review_result(result)
+        assert any("evidence is required" in e for e in errors)
+
+    def test_finding_evidence_requires_file(self):
+        result = ReviewResult(
+            status=ReviewStatus.SUCCESS,
+            summary="Test",
+            findings=[Finding(
+                claim="Unsupported claim",
+                confidence=0.5,
+                severity="medium",
+                evidence=[EvidenceRef(source="diff")],
+            )],
+        )
+        errors = validate_review_result(result)
+        assert any(".file is required" in e for e in errors)
+
+    def test_finding_evidence_requires_source_or_snippet(self):
+        result = ReviewResult(
+            status=ReviewStatus.SUCCESS,
+            summary="Test",
+            findings=[Finding(
+                claim="Unsupported claim",
+                confidence=0.5,
+                severity="medium",
+                evidence=[EvidenceRef(file="test.py")],
+            )],
+        )
+        errors = validate_review_result(result)
+        assert any("source or snippet" in e for e in errors)
+
+    def test_uncertainties_do_not_require_evidence(self):
+        result = ReviewResult(
+            status=ReviewStatus.PARTIAL,
+            summary="Test",
+            uncertainties=["Could not verify related tests"],
+            notes=["Looked at changed files"],
+        )
+        errors = validate_review_result(result)
+        assert errors == []

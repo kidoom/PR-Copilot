@@ -68,6 +68,7 @@ def _message_to_payload(msg: Message) -> dict[str, Any]:
 
 
 ChildToolFactory = Callable[..., Union[list[Tool], Any]]
+RuntimeEventSink = Callable[[str, dict[str, Any]], None]
 
 
 async def run_subagent(
@@ -82,6 +83,7 @@ async def run_subagent(
     run_id: str = "",
     context_id: str = "",
     task_id: str = "",
+    on_runtime_event: RuntimeEventSink | None = None,
     # Compression parameters
     compression_config=None,  # CompressionConfig | None
 ) -> SubAgentResult:
@@ -123,6 +125,18 @@ async def run_subagent(
         messages=messages,
         max_steps=max_steps,
         on_message=on_message if memory_store and subagent_session_id else None,
+        on_tool_call=(
+            (lambda payload: on_runtime_event("tool.call", payload))
+            if on_runtime_event else None
+        ),
+        on_tool_result=(
+            (lambda payload: on_runtime_event("tool.result", payload))
+            if on_runtime_event else None
+        ),
+        agent_kind="subagent",
+        agent_type=agent_def.name,
+        task_id=task_id,
+        child_session_id=child_session_id,
         # Compression parameters
         session_id=subagent_session_id,
         memory_store=memory_store,
@@ -151,6 +165,7 @@ def build_subagent_runner(
     run_id: str = "",
     context_id: str = "",
     compression_config=None,  # CompressionConfig | None
+    on_runtime_event: RuntimeEventSink | None = None,
 ) -> Callable[..., Awaitable[SubAgentResult]]:
     async def runner(
         *,
@@ -169,6 +184,20 @@ def build_subagent_runner(
             )
 
         child_session_id = generate_child_session_id(parent_session_id)
+        task_id = ""
+        task_type = ""
+        if task:
+            task_id = task.get("task_id", "")
+            task_type = task.get("task_type", "")
+
+        if on_runtime_event:
+            on_runtime_event("subagent.started", {
+                "task_id": task_id,
+                "task_type": task_type,
+                "agent_type": agent_def.name,
+                "child_session_id": child_session_id,
+            })
+
         factory_result = child_tool_factory(child_session_id, task=task)
 
         # Handle ChildToolBundle or plain list[Tool]
@@ -181,23 +210,51 @@ def build_subagent_runner(
         child_tools = filter_tools(child_registry, agent_def)
         effective_max_steps = max_steps if max_steps is not None else agent_def.default_max_steps
 
-        # Get task_id if available
-        task_id = ""
-        if task:
-            task_id = task.get("task_id", "")
+        try:
+            result = await run_subagent(
+                model=model,
+                agent_def=agent_def,
+                prompt=prompt,
+                max_steps=effective_max_steps,
+                child_session_id=child_session_id,
+                child_tools=child_tools,
+                memory_store=memory_store,
+                run_id=run_id,
+                context_id=context_id,
+                task_id=task_id,
+                on_runtime_event=on_runtime_event,
+                compression_config=compression_config,
+            )
+        except Exception as exc:
+            if on_runtime_event:
+                on_runtime_event("subagent.completed", {
+                    "task_id": task_id,
+                    "task_type": task_type,
+                    "agent_type": agent_def.name,
+                    "child_session_id": child_session_id,
+                    "status": "error",
+                    "error": str(exc),
+                })
+            raise
 
-        return await run_subagent(
-            model=model,
-            agent_def=agent_def,
-            prompt=prompt,
-            max_steps=effective_max_steps,
-            child_session_id=child_session_id,
-            child_tools=child_tools,
-            memory_store=memory_store,
-            run_id=run_id,
-            context_id=context_id,
-            task_id=task_id,
-            compression_config=compression_config,
-        )
+        if on_runtime_event:
+            from backend.agent.runtime.review_result import parse_review_result, validate_review_result
+            parsed = parse_review_result(result.output)
+            validation_errors = validate_review_result(parsed) if parsed else ["Failed to parse JSON"]
+            status = "valid" if parsed is not None and not validation_errors else "invalid"
+            if result.stopped_by_max_steps:
+                status = "max_steps"
+            on_runtime_event("subagent.completed", {
+                "task_id": task_id,
+                "task_type": task_type,
+                "agent_type": result.agent_type,
+                "child_session_id": result.child_session_id,
+                "memory_session_id": result.memory_session_id,
+                "status": status,
+                "stopped_by_max_steps": result.stopped_by_max_steps,
+                "validation_errors": validation_errors if status == "invalid" else [],
+            })
+
+        return result
 
     return runner

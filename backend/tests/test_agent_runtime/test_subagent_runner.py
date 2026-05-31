@@ -580,3 +580,36 @@ async def test_subagent_initial_messages_include_role_and_task():
     # Second message should be user with task prompt
     assert messages[1].role == Role.USER
     assert "authentication module" in messages[1].content.lower()
+
+
+@pytest.mark.asyncio
+async def test_run_subagent_returns_memory_session_id_when_persisted(tmp_path):
+    from backend.agent.runtime.memory.store import FileMemoryStore
+
+    model = FakeModelClient([
+        ModelResponse(content="done", tool_use_blocks=[], token_usage=TokenUsage(5, 10)),
+    ])
+    agent_def = AgentDefinition(
+        name="security-context-agent",
+        description="Security review",
+        system_prompt="sys",
+        default_max_steps=5,
+    )
+    store = FileMemoryStore(str(tmp_path))
+
+    result = await run_subagent(
+        model=model,
+        agent_def=agent_def,
+        prompt="Review auth",
+        max_steps=5,
+        child_session_id="child_1",
+        child_tools=[],
+        memory_store=store,
+        run_id="run-1",
+        context_id="ctx-1",
+        task_id="task-1",
+    )
+
+    assert result.memory_session_id
+    assert "security-context-agent" in result.memory_session_id
+    assert "task-1" in result.memory_session_id

@@ -18,7 +18,7 @@ class VerifyRepoContextTool(Tool):
     def description(self) -> str: return "Verify repository workspace matches PR owner/repo/head_sha"
     @property
     def input_schema(self) -> dict[str, Any]:
-        return {"type": "object", "properties": {"owner": {"type": "string"}, "repo": {"type": "string"}, "head_sha": {"type": "string"}, "workspace_root": {"type": "string"}}, "required": ["owner", "repo"]}
+        return {"type": "object", "properties": {"owner": {"type": "string"}, "repo": {"type": "string"}, "head_sha": {"type": "string"}, "workspace_root": {"type": "string"}}}
     @property
     def risk_level(self) -> RiskLevel: return RiskLevel.LOW
     @property
@@ -28,7 +28,14 @@ class VerifyRepoContextTool(Tool):
 
     async def call(self, input: dict[str, Any]) -> str:
         import json
-        result = rc_tools.verify_repo_context(self._session, input["owner"], input["repo"], input.get("head_sha", ""), input.get("workspace_root", ""), self._pr_context)
+        result = rc_tools.verify_repo_context(
+            self._session,
+            input.get("owner", ""),
+            input.get("repo", ""),
+            input.get("head_sha", ""),
+            input.get("workspace_root", ""),
+            self._pr_context,
+        )
         return json.dumps(result)
 
 

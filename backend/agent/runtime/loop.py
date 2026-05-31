@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Callable
+from typing import Any, Callable
 
 from backend.agent.model.messages import Message, ModelResponse, Role, TokenUsage, ToolResultBlock, ToolUseBlock
 from backend.agent.runtime.trace import ThinkStep, CallStep, ObserveStep, FinalStep, AgentStep
@@ -17,6 +17,7 @@ MessageCallback = Callable[[Message], None]
 
 # Callback type for compact events
 CompactCallback = Callable[[str, int, int], None]  # (event_type, before_count, after_count)
+ToolEventCallback = Callable[[dict[str, Any]], None]
 
 
 async def run_loop(
@@ -27,6 +28,12 @@ async def run_loop(
     max_steps: int = 10,
     tool_consent: ToolConsentFn | None = None,
     on_message: MessageCallback | None = None,
+    on_tool_call: ToolEventCallback | None = None,
+    on_tool_result: ToolEventCallback | None = None,
+    agent_kind: str = "",
+    agent_type: str = "",
+    task_id: str = "",
+    child_session_id: str = "",
     # Compression parameters
     session_id: str = "",
     memory_store=None,  # FileMemoryStore | None
@@ -175,6 +182,16 @@ async def run_loop(
                 tool_input=block.input,
                 tool_use_id=block.tool_use_id,
             ))
+            if on_tool_call:
+                on_tool_call({
+                    "agent_kind": agent_kind,
+                    "agent_type": agent_type,
+                    "task_id": task_id,
+                    "child_session_id": child_session_id,
+                    "tool_name": block.name,
+                    "tool_use_id": block.tool_use_id,
+                    "input": block.input,
+                })
 
             tool = tool_registry.resolve(block.name)
             if tool is None:
@@ -184,6 +201,17 @@ async def run_loop(
                     output=error_output,
                     is_error=True,
                 ))
+                if on_tool_result:
+                    on_tool_result({
+                        "agent_kind": agent_kind,
+                        "agent_type": agent_type,
+                        "task_id": task_id,
+                        "child_session_id": child_session_id,
+                        "tool_name": block.name,
+                        "tool_use_id": block.tool_use_id,
+                        "output": error_output,
+                        "is_error": True,
+                    })
                 tool_msg = Message(
                     role=Role.TOOL,
                     content=[ToolResultBlock(
@@ -206,6 +234,17 @@ async def run_loop(
                         output=consent_output,
                         is_error=True,
                     ))
+                    if on_tool_result:
+                        on_tool_result({
+                            "agent_kind": agent_kind,
+                            "agent_type": agent_type,
+                            "task_id": task_id,
+                            "child_session_id": child_session_id,
+                            "tool_name": block.name,
+                            "tool_use_id": block.tool_use_id,
+                            "output": consent_output,
+                            "is_error": True,
+                        })
                     consent_msg = Message(
                         role=Role.TOOL,
                         content=[ToolResultBlock(
@@ -231,6 +270,17 @@ async def run_loop(
                 output=result,
                 is_error=is_error,
             ))
+            if on_tool_result:
+                on_tool_result({
+                    "agent_kind": agent_kind,
+                    "agent_type": agent_type,
+                    "task_id": task_id,
+                    "child_session_id": child_session_id,
+                    "tool_name": block.name,
+                    "tool_use_id": block.tool_use_id,
+                    "output": result,
+                    "is_error": is_error,
+                })
             tool_msg = Message(
                 role=Role.TOOL,
                 content=[ToolResultBlock(
