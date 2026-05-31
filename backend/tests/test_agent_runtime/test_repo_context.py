@@ -327,6 +327,12 @@ def test_tool_schemas_are_model_safe():
         assert not hasattr(schema, "risk_level")
 
 
+def test_verify_repo_context_schema_does_not_require_model_identity():
+    s = _make_session()
+    verify_tool = next(t for t in create_context_tools(s, pr_context=None) if t.name == "verify_repo_context")
+    assert "required" not in verify_tool.input_schema
+
+
 def test_all_tools_read_only():
     s = _make_session()
     tools = create_context_tools(s, pr_context=None)

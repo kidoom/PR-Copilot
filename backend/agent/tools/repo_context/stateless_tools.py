@@ -6,6 +6,16 @@ from pathlib import Path
 from typing import Any
 
 from backend.agent.tools.protocol import Tool, RiskLevel
+from backend.agent.tools.repo_context.models import RepoContextSession, RepoVerificationState, VerificationStatus
+from backend.agent.tools.repo_context.policy import (
+    check_budget_file_read,
+    check_budget_search,
+    check_budget_tokens,
+    consume_file_read_budget,
+    consume_search_budget,
+    consume_token_budget,
+    require_verification,
+)
 
 
 # Constants for safety
@@ -22,6 +32,69 @@ SENSITIVE_FILE_PATTERNS = (
 
 MAX_LINES = 50
 MAX_SEARCH_RESULTS = 50
+
+
+def _estimate_tokens(text: str) -> int:
+    return max(1, len(text) // 4)
+
+
+def _remaining_tokens(session: RepoContextSession) -> int:
+    return max(0, session.budget.max_tokens - session.usage.approximate_tokens)
+
+
+def _verification_error(session: RepoContextSession | None) -> dict[str, Any] | None:
+    if session is None:
+        return None
+    err = require_verification(session)
+    if err:
+        return {"error": err, "status": "verification_failed"}
+    return None
+
+
+def _search_budget_error(session: RepoContextSession | None) -> dict[str, Any] | None:
+    if session is not None and not check_budget_search(session):
+        return {
+            "error": "Search budget exhausted",
+            "status": "budget_exhausted",
+            "max_searches": session.budget.max_searches,
+        }
+    return None
+
+
+def _file_budget_error(session: RepoContextSession | None) -> dict[str, Any] | None:
+    if session is not None and not check_budget_file_read(session):
+        return {
+            "error": "File read budget exhausted",
+            "status": "budget_exhausted",
+            "max_files": session.budget.max_files,
+        }
+    return None
+
+
+def _token_budget_error(session: RepoContextSession | None, content: str, path: str = "") -> dict[str, Any] | None:
+    if session is None:
+        return None
+    estimated = _estimate_tokens(content)
+    if not check_budget_tokens(session, estimated):
+        return {
+            "error": "Token budget exceeded",
+            "status": "budget_exhausted",
+            "path": path,
+            "estimated_tokens": estimated,
+            "remaining_tokens": _remaining_tokens(session),
+        }
+    return None
+
+
+def _consume_search(session: RepoContextSession | None) -> None:
+    if session is not None:
+        consume_search_budget(session)
+
+
+def _consume_file_and_tokens(session: RepoContextSession | None, content: str) -> None:
+    if session is not None:
+        consume_file_read_budget(session)
+        consume_token_budget(session, _estimate_tokens(content))
 
 
 def _is_ignored_directory(path: str) -> bool:
@@ -150,8 +223,9 @@ class StatelessSearchDiffTool(Tool):
 class StatelessSearchRepoTool(Tool):
     """Search repository content by keyword."""
 
-    def __init__(self, repo_root: str) -> None:
+    def __init__(self, repo_root: str, session: RepoContextSession | None = None) -> None:
         self._repo_root = repo_root
+        self._session = session
 
     @property
     def name(self) -> str: return "search_repo"
@@ -168,6 +242,10 @@ class StatelessSearchRepoTool(Tool):
     def is_concurrency_safe(self) -> bool: return True
 
     async def call(self, input: dict[str, Any]) -> str:
+        err = _verification_error(self._session) or _search_budget_error(self._session)
+        if err:
+            return json.dumps(err)
+
         query = input["query"].lower()
         path_scope = input.get("path_scope", "")
         limit = min(input.get("limit", 20), MAX_SEARCH_RESULTS)
@@ -211,20 +289,23 @@ class StatelessSearchRepoTool(Tool):
                                     "file": rel_path,
                                     "line": line_num,
                                     "snippet": line.strip()[:200],
-                                })
-                                if len(matches) >= limit:
-                                    return json.dumps({"matches": matches, "total": len(matches), "truncated": True})
+                        })
+                        if len(matches) >= limit:
+                            _consume_search(self._session)
+                            return json.dumps({"matches": matches, "total": len(matches), "truncated": True})
                 except (OSError, UnicodeDecodeError):
                     continue
 
+        _consume_search(self._session)
         return json.dumps({"matches": matches, "total": len(matches), "truncated": False})
 
 
 class StatelessReadRepoFileTool(Tool):
     """Read a bounded snippet from a repository file."""
 
-    def __init__(self, repo_root: str) -> None:
+    def __init__(self, repo_root: str, session: RepoContextSession | None = None) -> None:
         self._repo_root = repo_root
+        self._session = session
 
     @property
     def name(self) -> str: return "read_repo_file"
@@ -241,6 +322,10 @@ class StatelessReadRepoFileTool(Tool):
     def is_concurrency_safe(self) -> bool: return True
 
     async def call(self, input: dict[str, Any]) -> str:
+        err = _verification_error(self._session) or _file_budget_error(self._session)
+        if err:
+            return json.dumps(err)
+
         path = input["path"]
         start_line = input.get("start_line", 1)
         max_lines = min(input.get("max_lines", 50), MAX_LINES)
@@ -273,6 +358,12 @@ class StatelessReadRepoFileTool(Tool):
         except OSError as e:
             return json.dumps({"error": str(e), "path": path})
 
+        content = "\n".join(line["content"] for line in lines)
+        err = _token_budget_error(self._session, content, path)
+        if err:
+            return json.dumps(err)
+
+        _consume_file_and_tokens(self._session, content)
         return json.dumps({
             "path": path,
             "start_line": start_line,
@@ -285,8 +376,9 @@ class StatelessReadRepoFileTool(Tool):
 class StatelessSearchTestsForTool(Tool):
     """Find candidate test files related to a source file."""
 
-    def __init__(self, repo_root: str) -> None:
+    def __init__(self, repo_root: str, session: RepoContextSession | None = None) -> None:
         self._repo_root = repo_root
+        self._session = session
 
     @property
     def name(self) -> str: return "search_tests_for"
@@ -303,6 +395,10 @@ class StatelessSearchTestsForTool(Tool):
     def is_concurrency_safe(self) -> bool: return True
 
     async def call(self, input: dict[str, Any]) -> str:
+        err = _verification_error(self._session) or _search_budget_error(self._session)
+        if err:
+            return json.dumps(err)
+
         source_file = input["source_file"]
         limit = input.get("limit", 20)
 
@@ -328,8 +424,10 @@ class StatelessSearchTestsForTool(Tool):
                         rel_path = os.path.relpath(os.path.join(dirpath, fname), root)
                         candidates.append({"file": rel_path, "reason": f"Matches pattern {pattern}"})
                         if len(candidates) >= limit:
+                            _consume_search(self._session)
                             return json.dumps({"candidates": candidates, "total": len(candidates), "status": "found"})
 
+        _consume_search(self._session)
         status = "found" if candidates else "inconclusive"
         return json.dumps({"candidates": candidates, "total": len(candidates), "status": status})
 
@@ -352,8 +450,9 @@ class StatelessReadRepoManifestTool(Tool):
         ],
     }
 
-    def __init__(self, repo_root: str) -> None:
+    def __init__(self, repo_root: str, session: RepoContextSession | None = None) -> None:
         self._repo_root = repo_root
+        self._session = session
 
     @property
     def name(self) -> str: return "read_repo_manifest"
@@ -370,28 +469,49 @@ class StatelessReadRepoManifestTool(Tool):
     def is_concurrency_safe(self) -> bool: return True
 
     async def call(self, input: dict[str, Any]) -> str:
+        err = _verification_error(self._session) or _file_budget_error(self._session)
+        if err:
+            return json.dumps(err)
+
         root = self._repo_root
         manifests: dict[str, Any] = {}
+        consumed_reads = 0
+        consumed_content: list[str] = []
 
         for category, paths in self._MANIFEST_FILES.items():
             found = []
             for p in paths:
+                if (
+                    self._session is not None
+                    and self._session.usage.file_read_count + consumed_reads >= self._session.budget.max_files
+                ):
+                    break
                 full = os.path.join(root, p)
                 if os.path.isfile(full):
                     try:
                         with open(full, "r", encoding="utf-8", errors="ignore") as f:
                             content = f.read(2000)
+                        err = _token_budget_error(self._session, "\n".join(consumed_content + [content]), p)
+                        if err:
+                            return json.dumps(err)
                         found.append({"path": p, "content": content, "truncated": len(content) >= 2000})
+                        consumed_reads += 1
+                        consumed_content.append(content)
                     except OSError:
                         pass
                 elif os.path.isdir(full):
                     try:
                         entries = os.listdir(full)[:10]
                         found.append({"path": p, "entries": entries, "is_directory": True})
+                        consumed_reads += 1
                     except OSError:
                         pass
             if found:
                 manifests[category] = found
+
+        if self._session is not None and consumed_reads:
+            self._session.usage.file_read_count += consumed_reads
+            consume_token_budget(self._session, _estimate_tokens("\n".join(consumed_content)))
 
         return json.dumps({"manifests": manifests})
 
@@ -399,9 +519,17 @@ class StatelessReadRepoManifestTool(Tool):
 class StatelessVerifyRepoContextTool(Tool):
     """Verify repository workspace (diagnostic only, no state mutation)."""
 
-    def __init__(self, repo_root: str, pr_context: Any = None) -> None:
+    def __init__(
+        self,
+        repo_root: str,
+        pr_context: Any = None,
+        session: RepoContextSession | None = None,
+        trusted_identity: Any = None,
+    ) -> None:
         self._repo_root = repo_root
         self._pr_context = pr_context
+        self._session = session
+        self._trusted_identity = trusted_identity
 
     @property
     def name(self) -> str: return "verify_repo_context"
@@ -409,7 +537,7 @@ class StatelessVerifyRepoContextTool(Tool):
     def description(self) -> str: return "Verify repository workspace matches PR (diagnostic)"
     @property
     def input_schema(self) -> dict[str, Any]:
-        return {"type": "object", "properties": {"owner": {"type": "string"}, "repo": {"type": "string"}}, "required": ["owner", "repo"]}
+        return {"type": "object", "properties": {"owner": {"type": "string"}, "repo": {"type": "string"}, "head_sha": {"type": "string"}}}
     @property
     def risk_level(self) -> RiskLevel: return RiskLevel.LOW
     @property
@@ -420,16 +548,42 @@ class StatelessVerifyRepoContextTool(Tool):
     async def call(self, input: dict[str, Any]) -> str:
         import subprocess
 
-        owner = input["owner"]
-        repo = input["repo"]
+        owner = input.get("owner", "")
+        repo = input.get("repo", "")
         repo_root = self._repo_root
+        head_sha = input.get("head_sha", "")
+
+        if self._trusted_identity is not None:
+            owner = getattr(self._trusted_identity, "owner", owner)
+            repo = getattr(self._trusted_identity, "repo", repo)
+            head_sha = getattr(self._trusted_identity, "head_sha", head_sha)
+        elif self._pr_context is not None:
+            owner = getattr(self._pr_context, "owner", owner)
+            repo = getattr(self._pr_context, "repo", repo)
+            commits = getattr(self._pr_context, "commits", None)
+            if commits is not None:
+                head_sha = getattr(commits, "head_sha", head_sha)
+
+        def _fail(reason: str, **extra: Any) -> str:
+            if self._session is not None:
+                self._session.verification = RepoVerificationState(
+                    status=VerificationStatus.FAILED,
+                    owner=owner,
+                    repo=repo,
+                    head_sha=head_sha,
+                    reason=reason,
+                )
+            return json.dumps({"verified": False, "reason": reason, **extra})
 
         if not os.path.isdir(repo_root):
-            return json.dumps({"verified": False, "reason": "Repository root not found"})
+            return _fail("Repository root not found")
 
         git_dir = os.path.join(repo_root, ".git")
         if not os.path.exists(git_dir):
-            return json.dumps({"verified": False, "reason": "Not a git repository"})
+            return _fail("Not a git repository")
+
+        if not owner or not repo:
+            return _fail("PR identity is unavailable")
 
         # Check remote URL
         try:
@@ -439,21 +593,11 @@ class StatelessVerifyRepoContextTool(Tool):
             )
             remote = result.stdout.strip() if result.returncode == 0 else ""
             if f"{owner}/{repo}" not in remote.lower():
-                return json.dumps({
-                    "verified": False,
-                    "reason": f"Remote origin does not match {owner}/{repo}",
-                    "remote": remote,
-                })
+                return _fail(f"Remote origin does not match {owner}/{repo}", remote=remote)
         except (OSError, subprocess.TimeoutExpired):
-            return json.dumps({"verified": False, "reason": "Cannot read git remote"})
+            return _fail("Cannot read git remote")
 
         # Check HEAD SHA
-        head_sha = ""
-        if self._pr_context:
-            commits = getattr(self._pr_context, "commits", None)
-            if commits:
-                head_sha = getattr(commits, "head_sha", "")
-
         if head_sha:
             try:
                 result = subprocess.run(
@@ -462,12 +606,17 @@ class StatelessVerifyRepoContextTool(Tool):
                 )
                 actual_sha = result.stdout.strip() if result.returncode == 0 else ""
                 if not actual_sha.startswith(head_sha[:12]):
-                    return json.dumps({
-                        "verified": False,
-                        "reason": f"HEAD mismatch: expected {head_sha[:12]}, got {actual_sha[:12]}",
-                    })
+                    return _fail(f"HEAD mismatch: expected {head_sha[:12]}, got {actual_sha[:12]}")
             except (OSError, subprocess.TimeoutExpired):
-                return json.dumps({"verified": False, "reason": "Cannot read HEAD SHA"})
+                return _fail("Cannot read HEAD SHA")
+
+        if self._session is not None:
+            self._session.verification = RepoVerificationState(
+                status=VerificationStatus.VERIFIED,
+                owner=owner,
+                repo=repo,
+                head_sha=head_sha,
+            )
 
         return json.dumps({
             "verified": True,
@@ -530,6 +679,8 @@ class StatelessTodoWriteTool(Tool):
 def create_stateless_context_tools(
     repo_root: str,
     pr_context: Any,
+    session: RepoContextSession | None = None,
+    trusted_identity: Any = None,
 ) -> list[Tool]:
     """Create stateless repo context tools using direct filesystem access.
 
@@ -552,13 +703,18 @@ def create_stateless_context_tools(
 
     return [
         StatelessTodoWriteTool(),
-        StatelessVerifyRepoContextTool(repo_root, pr_context),
+        StatelessVerifyRepoContextTool(
+            repo_root,
+            pr_context,
+            session=session,
+            trusted_identity=trusted_identity,
+        ),
         StatelessReadFilePatchTool(pr_context),
         StatelessSearchDiffTool(pr_context),
-        StatelessSearchRepoTool(repo_root),
-        StatelessReadRepoFileTool(repo_root),
-        StatelessSearchTestsForTool(repo_root),
-        StatelessReadRepoManifestTool(repo_root),
+        StatelessSearchRepoTool(repo_root, session=session),
+        StatelessReadRepoFileTool(repo_root, session=session),
+        StatelessSearchTestsForTool(repo_root, session=session),
+        StatelessReadRepoManifestTool(repo_root, session=session),
         StatelessReadCheckSummaryTool(),
     ]
 
@@ -568,8 +724,9 @@ def create_stateless_context_tools(
 class ProviderSearchRepoTool(Tool):
     """Search repository content via RepoProvider."""
 
-    def __init__(self, provider: Any) -> None:
+    def __init__(self, provider: Any, session: RepoContextSession | None = None) -> None:
         self._provider = provider
+        self._session = session
 
     @property
     def name(self) -> str: return "search_repo"
@@ -586,6 +743,10 @@ class ProviderSearchRepoTool(Tool):
     def is_concurrency_safe(self) -> bool: return True
 
     async def call(self, input: dict[str, Any]) -> str:
+        err = _verification_error(self._session) or _search_budget_error(self._session)
+        if err:
+            return json.dumps(err)
+
         query = input["query"]
         path_scope = input.get("path_scope", "")
         limit = max(1, min(input.get("limit", 20), MAX_SEARCH_RESULTS))
@@ -593,6 +754,7 @@ class ProviderSearchRepoTool(Tool):
         result = await self._provider.search_code(query, globs=globs, max_results=limit)
         if result.error:
             return json.dumps({"error": result.error, "matches": [], "total": 0, "truncated": result.truncated})
+        _consume_search(self._session)
         return json.dumps({
             "matches": [{"file": m.file, "line": m.line, "snippet": m.snippet} for m in result.matches],
             "total": len(result.matches),
@@ -603,8 +765,9 @@ class ProviderSearchRepoTool(Tool):
 class ProviderReadRepoFileTool(Tool):
     """Read a bounded snippet via RepoProvider."""
 
-    def __init__(self, provider: Any) -> None:
+    def __init__(self, provider: Any, session: RepoContextSession | None = None) -> None:
         self._provider = provider
+        self._session = session
 
     @property
     def name(self) -> str: return "read_repo_file"
@@ -621,6 +784,10 @@ class ProviderReadRepoFileTool(Tool):
     def is_concurrency_safe(self) -> bool: return True
 
     async def call(self, input: dict[str, Any]) -> str:
+        err = _verification_error(self._session) or _file_budget_error(self._session)
+        if err:
+            return json.dumps(err)
+
         path = input["path"]
         start_line = input.get("start_line", 1)
         max_lines = max(1, min(input.get("max_lines", 50), MAX_LINES))
@@ -628,6 +795,11 @@ class ProviderReadRepoFileTool(Tool):
         result = await self._provider.read_file(path, start_line=start_line, end_line=end_line)
         if result.error:
             return json.dumps({"error": result.error, "path": path})
+        content = "\n".join(str(line.get("content", "")) for line in result.lines)
+        err = _token_budget_error(self._session, content, path)
+        if err:
+            return json.dumps(err)
+        _consume_file_and_tokens(self._session, content)
         return json.dumps({
             "path": path,
             "start_line": start_line,
@@ -640,8 +812,9 @@ class ProviderReadRepoFileTool(Tool):
 class ProviderSearchTestsForTool(Tool):
     """Find candidate test files via RepoProvider."""
 
-    def __init__(self, provider: Any) -> None:
+    def __init__(self, provider: Any, session: RepoContextSession | None = None) -> None:
         self._provider = provider
+        self._session = session
 
     @property
     def name(self) -> str: return "search_tests_for"
@@ -658,6 +831,10 @@ class ProviderSearchTestsForTool(Tool):
     def is_concurrency_safe(self) -> bool: return True
 
     async def call(self, input: dict[str, Any]) -> str:
+        err = _verification_error(self._session) or _search_budget_error(self._session)
+        if err:
+            return json.dumps(err)
+
         source_file = input["source_file"]
         limit = max(1, min(input.get("limit", 20), MAX_SEARCH_RESULTS))
         basename = os.path.basename(source_file)
@@ -672,6 +849,7 @@ class ProviderSearchTestsForTool(Tool):
         result = await self._provider.list_files(globs=patterns, max_results=limit)
         if result.error:
             return json.dumps({"error": result.error, "candidates": [], "total": 0, "status": "error"})
+        _consume_search(self._session)
         candidates = [{"file": e.path, "reason": "Matches test pattern"} for e in result.entries]
         status = "found" if candidates else "inconclusive"
         return json.dumps({"candidates": candidates, "total": len(candidates), "status": status})
@@ -680,8 +858,9 @@ class ProviderSearchTestsForTool(Tool):
 class ProviderReadRepoManifestTool(Tool):
     """Read manifest files via RepoProvider."""
 
-    def __init__(self, provider: Any) -> None:
+    def __init__(self, provider: Any, session: RepoContextSession | None = None) -> None:
         self._provider = provider
+        self._session = session
 
     @property
     def name(self) -> str: return "read_repo_manifest"
@@ -698,26 +877,49 @@ class ProviderReadRepoManifestTool(Tool):
     def is_concurrency_safe(self) -> bool: return True
 
     async def call(self, input: dict[str, Any]) -> str:
+        err = _verification_error(self._session) or _file_budget_error(self._session)
+        if err:
+            return json.dumps(err)
+
         result = await self._provider.get_manifest()
         manifests: dict[str, Any] = {}
+        consumed_reads = 0
+        consumed_content: list[str] = []
         for category, entries in result.manifests.items():
             found = []
             for e in entries:
+                if (
+                    self._session is not None
+                    and self._session.usage.file_read_count + consumed_reads >= self._session.budget.max_files
+                ):
+                    break
                 entry: dict[str, Any] = {"path": e.path}
                 if e.is_directory:
                     entry["entries"] = e.entries or []
                     entry["is_directory"] = True
+                    consumed_reads += 1
                 else:
+                    content = e.content or ""
+                    err = _token_budget_error(self._session, "\n".join(consumed_content + [content]), e.path)
+                    if err:
+                        return json.dumps(err)
                     entry["content"] = e.content
                     entry["truncated"] = e.truncated
+                    consumed_reads += 1
+                    consumed_content.append(content)
                 found.append(entry)
             manifests[category] = found
+        if self._session is not None and consumed_reads:
+            self._session.usage.file_read_count += consumed_reads
+            consume_token_budget(self._session, _estimate_tokens("\n".join(consumed_content)))
         return json.dumps({"manifests": manifests})
 
 
 def create_provider_backed_context_tools(
     provider: Any,
     pr_context: Any,
+    session: RepoContextSession | None = None,
+    trusted_identity: Any = None,
 ) -> list[Tool]:
     """Create stateless repo context tools backed by a RepoProvider.
 
@@ -733,12 +935,17 @@ def create_provider_backed_context_tools(
     """
     return [
         StatelessTodoWriteTool(),
-        StatelessVerifyRepoContextTool(provider.repo_root, pr_context),
+        StatelessVerifyRepoContextTool(
+            provider.repo_root,
+            pr_context,
+            session=session,
+            trusted_identity=trusted_identity,
+        ),
         StatelessReadFilePatchTool(pr_context),
         StatelessSearchDiffTool(pr_context),
-        ProviderSearchRepoTool(provider),
-        ProviderReadRepoFileTool(provider),
-        ProviderSearchTestsForTool(provider),
-        ProviderReadRepoManifestTool(provider),
+        ProviderSearchRepoTool(provider, session=session),
+        ProviderReadRepoFileTool(provider, session=session),
+        ProviderSearchTestsForTool(provider, session=session),
+        ProviderReadRepoManifestTool(provider, session=session),
         StatelessReadCheckSummaryTool(),
     ]

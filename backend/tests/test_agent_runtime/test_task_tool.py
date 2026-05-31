@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import pytest
 
 from backend.agent.runtime.agent_def import AgentDefinition, AgentRegistry
@@ -22,6 +23,25 @@ def _make_valid_review_output(agent_type: str, prompt: str) -> str:
 async def fake_runner(*, prompt: str, agent_type: str, max_steps: int | None = None, task: dict | None = None) -> SubAgentResult:
     return SubAgentResult(
         output=_make_valid_review_output(agent_type, prompt),
+        agent_type=agent_type,
+        stopped_by_max_steps=False,
+    )
+
+
+async def fake_runner_unsupported_finding(*, prompt: str, agent_type: str, max_steps: int | None = None, task: dict | None = None) -> SubAgentResult:
+    return SubAgentResult(
+        output=json.dumps({
+            "status": "success",
+            "summary": "unsupported claim",
+            "findings": [{
+                "claim": "This claim has no evidence",
+                "confidence": 0.8,
+                "severity": "medium",
+                "evidence": [],
+            }],
+            "uncertainties": [],
+            "notes": [],
+        }),
         agent_type=agent_type,
         stopped_by_max_steps=False,
     )
@@ -306,3 +326,89 @@ async def test_run_many_continues_on_runner_exception():
     assert results[0]["status"] == "error"
     assert "model crashed" in results[0]["error"]
     assert results[1]["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_run_many_preserves_input_order_when_tasks_complete_out_of_order():
+    async def delayed_runner(*, prompt: str, agent_type: str, max_steps: int | None = None, task: dict | None = None) -> SubAgentResult:
+        delay = 0.02 if task and task.get("task_id") == "slow" else 0.001
+        await asyncio.sleep(delay)
+        return SubAgentResult(
+            output=_make_valid_review_output(agent_type, prompt),
+            agent_type=agent_type,
+            stopped_by_max_steps=False,
+        )
+
+    reg = _make_registry()
+    tool = TaskTool(agent_registry=reg, runner=delayed_runner, max_concurrent_tasks=2)
+
+    results = await tool.run_many(
+        tasks=[
+            {"task_id": "slow", "task_type": "security_context"},
+            {"task_id": "fast", "task_type": "test_context"},
+        ],
+        routes=[
+            {"task_type": "security_context", "agent_type": "security-context-agent"},
+            {"task_type": "test_context", "agent_type": "test-context-agent"},
+        ],
+    )
+
+    assert [r["task_id"] for r in results] == ["slow", "fast"]
+    assert [r["index"] for r in results] == [0, 1]
+
+
+@pytest.mark.asyncio
+async def test_run_many_respects_concurrency_limit():
+    active = 0
+    max_seen = 0
+
+    async def tracking_runner(*, prompt: str, agent_type: str, max_steps: int | None = None, task: dict | None = None) -> SubAgentResult:
+        nonlocal active, max_seen
+        active += 1
+        max_seen = max(max_seen, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return SubAgentResult(
+            output=_make_valid_review_output(agent_type, prompt),
+            agent_type=agent_type,
+            stopped_by_max_steps=False,
+        )
+
+    reg = _make_registry()
+    tool = TaskTool(agent_registry=reg, runner=tracking_runner, max_concurrent_tasks=2)
+
+    await tool.run_many(
+        tasks=[
+            {"task_id": f"t{i}", "task_type": "security_context"}
+            for i in range(5)
+        ],
+        routes=[{"task_type": "security_context", "agent_type": "security-context-agent"}],
+    )
+
+    assert max_seen == 2
+
+
+@pytest.mark.asyncio
+async def test_call_marks_finding_without_evidence_invalid():
+    reg = _make_registry()
+    tool = TaskTool(agent_registry=reg, runner=fake_runner_unsupported_finding)
+
+    result_json = await tool.call({"prompt": "review this", "agent_type": "reviewer"})
+    result = json.loads(result_json)
+
+    assert result["parse_status"] == "invalid"
+    assert any("evidence is required" in e for e in result["validation_errors"])
+
+
+@pytest.mark.asyncio
+async def test_run_many_marks_finding_without_evidence_invalid():
+    reg = _make_registry()
+    tool = TaskTool(agent_registry=reg, runner=fake_runner_unsupported_finding)
+
+    results = await tool.run_many(
+        tasks=[{"task_id": "t1", "task_type": "security_context"}],
+        routes=[{"task_type": "security_context", "agent_type": "security-context-agent"}],
+    )
+
+    assert results[0]["status"] == "invalid"
+    assert any("evidence is required" in e for e in results[0]["validation_errors"])

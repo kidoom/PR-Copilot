@@ -8,7 +8,7 @@ import pytest
 
 from backend.agent.model.client import ModelClient
 from backend.agent.model.messages import Message, ModelResponse, Role, ToolUseBlock
-from backend.agent.runtime.events import RUN_STARTED, RUN_COMPLETED, RUN_FAILED
+from backend.agent.runtime.events import RUN_STARTED, RUN_COMPLETED, RUN_FAILED, TOOL_CALL, TOOL_RESULT, SUBAGENT_STARTED, SUBAGENT_COMPLETED
 from backend.agent.runtime.main_runner import run_main_agent
 from backend.agent.runtime.memory.store import FileMemoryStore
 from backend.agent.runtime.run_manager import RunManager
@@ -169,3 +169,52 @@ async def test_run_main_agent_passes_max_steps(tmp_dir):
     )
 
     assert result["output"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_run_main_agent_publishes_tool_and_subagent_events(tmp_dir):
+    task_plan = {
+        "context_id": "ctx-1",
+        "tasks": [{"task_id": "t1", "task_type": "security_context"}],
+        "routes": [{"task_type": "security_context", "agent_type": "security-context-agent", "max_steps": 2}],
+    }
+    child_output = json.dumps({
+        "status": "success",
+        "summary": "checked",
+        "findings": [],
+        "uncertainties": [],
+        "notes": [],
+    })
+    model = FakeModel([
+        ModelResponse(
+            content="dispatching",
+            tool_use_blocks=[ToolUseBlock(tool_use_id="main_tool_1", name="task", input={"task_plan": task_plan})],
+        ),
+        ModelResponse(content=child_output, tool_use_blocks=[]),
+        ModelResponse(content="done", tool_use_blocks=[]),
+    ])
+    deps = _make_deps_with_fake_model(model, tmp_dir)
+    mgr = RunManager()
+    mgr.create_run("ctx-1", run_id="run-1")
+
+    with tempfile.TemporaryDirectory() as repo_root:
+        import os
+        os.makedirs(os.path.join(repo_root, ".git"))
+        result = await run_main_agent(
+            run_id="run-1",
+            context_id="ctx-1",
+            task_plan=task_plan,
+            pr_context=None,
+            repo_root=repo_root,
+            deps=deps,
+            run_manager=mgr,
+        )
+
+    assert result["output"] == "done"
+    event_types = [event.type for event in mgr.get_retained_events("run-1")]
+    assert RUN_STARTED in event_types
+    assert TOOL_CALL in event_types
+    assert SUBAGENT_STARTED in event_types
+    assert SUBAGENT_COMPLETED in event_types
+    assert TOOL_RESULT in event_types
+    assert RUN_COMPLETED in event_types

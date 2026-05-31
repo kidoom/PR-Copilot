@@ -120,6 +120,7 @@ class AgentDeps:
         workspace_manager: Any = None,
         pr_identity: Any = None,
         token: str | None = None,
+        on_runtime_event: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> MainAgentRuntime:
         child_bundles: dict[str, ChildToolBundle] = {}
         context_id = task_plan.get("context_id", "")
@@ -153,6 +154,7 @@ class AgentDeps:
                 repo_root=repo_root,
                 pr_context=pr_context,
                 provider=provider,
+                pr_identity=pr_identity,
             )
             child_bundles[child_session_id] = bundle
             return bundle
@@ -166,6 +168,7 @@ class AgentDeps:
             run_id=run_id,
             context_id=context_id,
             compression_config=self.compression_config,
+            on_runtime_event=on_runtime_event,
         )
         task_tool = TaskTool(
             runner=runner,
