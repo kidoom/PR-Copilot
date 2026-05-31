@@ -3,7 +3,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable
 
-from backend.agent.model.messages import Message, ModelResponse, Role, TokenUsage, ToolResultBlock, ToolUseBlock
+from backend.agent.model.messages import Message, ModelResponse, Role, TextDeltaCallback, TokenUsage, ToolResultBlock, ToolUseBlock
+from backend.agent.runtime.cancellation import CancellationProbe, check_cancellation
 from backend.agent.runtime.trace import ThinkStep, CallStep, ObserveStep, FinalStep, AgentStep
 from backend.agent.runtime.results import AgentResult, ToolExecutionResult
 from backend.agent.tools.protocol import Tool, ToolConsentFn
@@ -20,6 +21,62 @@ CompactCallback = Callable[[str, int, int], None]  # (event_type, before_count, 
 ToolEventCallback = Callable[[dict[str, Any]], None]
 
 
+def _salvage_json_from_messages(messages: list[Message]) -> str | None:
+    """Try to extract a valid review-result JSON from conversation history.
+
+    Scans assistant text messages and tool results for JSON containing
+    the required 'status' and 'summary' fields.
+    """
+    import json
+    import re
+
+    for msg in reversed(messages):
+        candidates: list[str] = []
+        if isinstance(msg.content, str) and msg.content.strip():
+            candidates.append(msg.content)
+        elif isinstance(msg.content, list):
+            for block in msg.content:
+                if isinstance(block, str) and block.strip():
+                    candidates.append(block)
+
+        for text in candidates:
+            # Try direct parse
+            stripped = text.strip()
+            if stripped.startswith("{"):
+                try:
+                    data = json.loads(stripped)
+                    if isinstance(data, dict) and "status" in data and "summary" in data:
+                        return stripped
+                except (json.JSONDecodeError, ValueError):
+                    pass
+
+            # Try extracting from code blocks
+            matches = re.findall(r'```(?:json)?\s*\n?([\s\S]*?)\n?```', text)
+            for match in matches:
+                match = match.strip()
+                if match.startswith("{"):
+                    try:
+                        data = json.loads(match)
+                        if isinstance(data, dict) and "status" in data and "summary" in data:
+                            return match
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+
+            # Try finding { ... } with required keys
+            start = text.find("{")
+            end = text.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                candidate = text[start:end + 1]
+                try:
+                    data = json.loads(candidate)
+                    if isinstance(data, dict) and "status" in data and "summary" in data:
+                        return candidate
+                except (json.JSONDecodeError, ValueError):
+                    pass
+
+    return None
+
+
 async def run_loop(
     *,
     model: ModelClient,
@@ -30,10 +87,12 @@ async def run_loop(
     on_message: MessageCallback | None = None,
     on_tool_call: ToolEventCallback | None = None,
     on_tool_result: ToolEventCallback | None = None,
+    on_text_delta: TextDeltaCallback | None = None,
     agent_kind: str = "",
     agent_type: str = "",
     task_id: str = "",
     child_session_id: str = "",
+    cancellation_probe: CancellationProbe | None = None,
     # Compression parameters
     session_id: str = "",
     memory_store=None,  # FileMemoryStore | None
@@ -54,6 +113,18 @@ async def run_loop(
     )
 
     for step_num in range(max_steps):
+        # Force final output when approaching max steps
+        if step_num == max_steps - 2:
+            reminder = Message(
+                role=Role.USER,
+                content=(
+                    "[SYSTEM] You have 2 steps remaining. Output your final JSON NOW. "
+                    "Do NOT call any more tools. Your next message must be a JSON object like:\n"
+                    '{"status":"success","summary":"...","findings":[],"uncertainties":[],"notes":[]}'
+                ),
+            )
+            messages.append(reminder)
+
         # Build request messages (may be compacted copy)
         request_messages = list(messages)
 
@@ -104,9 +175,19 @@ async def run_loop(
                     # AutoCompact failure is non-fatal
                     logger.warning(f"AutoCompact failed: {e}")
 
-        # Call model
+        # Check cancellation before model request (task 4.2)
+        check_cancellation(cancellation_probe)
+
+        # Call model - use streaming when on_text_delta callback is provided
         try:
-            response = await model.chat(request_messages, tool_schemas=tool_schemas)
+            if on_text_delta is not None:
+                response = await model.chat_stream(
+                    request_messages,
+                    tool_schemas=tool_schemas,
+                    on_text_delta=on_text_delta,
+                )
+            else:
+                response = await model.chat(request_messages, tool_schemas=tool_schemas)
         except Exception as e:
             # Check for context-length error
             if _compression_enabled and compression_config.reactive_compact_enabled:
@@ -177,6 +258,9 @@ async def run_loop(
             on_message(assistant_msg)
 
         for block in response.tool_use_blocks:
+            # Check cancellation before each tool call (task 4.2)
+            check_cancellation(cancellation_probe)
+
             steps.append(CallStep(
                 tool_name=block.name,
                 tool_input=block.input,
@@ -293,6 +377,18 @@ async def run_loop(
             if on_message:
                 on_message(tool_msg)
 
+            # Check cancellation after each tool call (task 4.2)
+            check_cancellation(cancellation_probe)
+
+    # Max steps reached — try to salvage any JSON from the conversation
+    salvaged = _salvage_json_from_messages(messages)
+    if salvaged:
+        return AgentResult(
+            output=salvaged,
+            steps=steps,
+            token_usage=total_usage,
+            stopped_by_max_steps=True,
+        )
     return AgentResult(
         output="Agent stopped: max steps reached without final answer.",
         steps=steps,

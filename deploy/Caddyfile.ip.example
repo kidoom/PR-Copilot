@@ -1,0 +1,17 @@
+http://140.143.209.138 {
+	encode gzip
+
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8000
+	}
+
+	handle /ws/* {
+		reverse_proxy 127.0.0.1:8000
+	}
+
+	handle {
+		root * D:\PR-Copilot\frontend\dist
+		try_files {path} /index.html
+		file_server
+	}
+}

@@ -172,8 +172,8 @@ def validate_review_result(result: ReviewResult) -> list[str]:
             errors.append(f"finding[{i}].claim is required")
         if not 0 <= finding.confidence <= 1:
             errors.append(f"finding[{i}].confidence must be between 0 and 1")
-        if finding.severity not in ("low", "medium", "high", "critical"):
-            errors.append(f"finding[{i}].severity must be low/medium/high/critical")
+        if finding.severity not in ("informational", "info", "low", "medium", "high", "critical"):
+            errors.append(f"finding[{i}].severity must be informational/info/low/medium/high/critical")
         if not finding.evidence:
             errors.append(f"finding[{i}].evidence is required for actionable findings")
         for j, evidence in enumerate(finding.evidence):

@@ -18,6 +18,33 @@ def _make_test_app() -> FastAPI:
     return app
 
 
+@pytest.fixture(autouse=True)
+def authenticated_websocket(monkeypatch):
+    async def authenticated_session(websocket):
+        return object()
+
+    monkeypatch.setattr(
+        "backend.api.routes.review_ws.get_authenticated_github_session",
+        authenticated_session,
+    )
+
+
+def test_websocket_rejects_anonymous_user(monkeypatch):
+    async def anonymous_session(websocket):
+        return None
+
+    monkeypatch.setattr(
+        "backend.api.routes.review_ws.get_authenticated_github_session",
+        anonymous_session,
+    )
+    app = _make_test_app()
+    client = TestClient(app)
+
+    with pytest.raises(Exception):
+        with client.websocket_connect("/ws/review-runs/any-run"):
+            pass
+
+
 def test_websocket_rejects_unknown_run():
     app = _make_test_app()
     client = TestClient(app)

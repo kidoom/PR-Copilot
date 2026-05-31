@@ -6,6 +6,7 @@ from typing import Any, Callable, Awaitable, Union
 from backend.agent.model.client import ModelClient
 from backend.agent.model.messages import Message, Role
 from backend.agent.runtime.agent_def import AgentDefinition, AgentRegistry
+from backend.agent.runtime.cancellation import CancellationProbe
 from backend.agent.runtime.loop import run_loop
 from backend.agent.runtime.memory import (
     AgentKind,
@@ -84,6 +85,7 @@ async def run_subagent(
     context_id: str = "",
     task_id: str = "",
     on_runtime_event: RuntimeEventSink | None = None,
+    cancellation_probe: CancellationProbe | None = None,
     # Compression parameters
     compression_config=None,  # CompressionConfig | None
 ) -> SubAgentResult:
@@ -137,6 +139,7 @@ async def run_subagent(
         agent_type=agent_def.name,
         task_id=task_id,
         child_session_id=child_session_id,
+        cancellation_probe=cancellation_probe,
         # Compression parameters
         session_id=subagent_session_id,
         memory_store=memory_store,
@@ -166,6 +169,7 @@ def build_subagent_runner(
     context_id: str = "",
     compression_config=None,  # CompressionConfig | None
     on_runtime_event: RuntimeEventSink | None = None,
+    cancellation_probe: CancellationProbe | None = None,
 ) -> Callable[..., Awaitable[SubAgentResult]]:
     async def runner(
         *,
@@ -174,6 +178,11 @@ def build_subagent_runner(
         max_steps: int | None = None,
         task: dict[str, Any] | None = None,
     ) -> SubAgentResult:
+        # Stop starting new sibling SubAgents after cancellation (task 4.5)
+        if cancellation_probe is not None and cancellation_probe.is_cancelled():
+            from backend.agent.runtime.cancellation import Cancelled
+            raise Cancelled("Dispatch cancelled: run is being cancelled")
+
         try:
             agent_def = agent_registry.resolve(agent_type)
         except Exception as exc:
@@ -223,6 +232,7 @@ def build_subagent_runner(
                 context_id=context_id,
                 task_id=task_id,
                 on_runtime_event=on_runtime_event,
+                cancellation_probe=cancellation_probe,
                 compression_config=compression_config,
             )
         except Exception as exc:

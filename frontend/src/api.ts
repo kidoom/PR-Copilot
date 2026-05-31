@@ -1,6 +1,33 @@
-import type { PrContextResponse, IntakeSummary, FilePatchResponse } from "./types"
+import type {
+  PrContextResponse,
+  GitHubAuthSession,
+  IntakeSummary,
+  FilePatchResponse,
+  ReviewRunEvent,
+  ReviewRunStatusResponse,
+} from "./types"
+
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "")
+
+function apiUrl(path: string): string {
+  return `${API_BASE}${path}`
+}
 
 type UnknownRecord = Record<string, unknown>
+
+export class ApiError extends Error {
+  status: number
+  code: string
+  actionUrl: string
+
+  constructor(message: string, status: number, code = "", actionUrl = "") {
+    super(message)
+    this.name = "ApiError"
+    this.status = status
+    this.code = code
+    this.actionUrl = actionUrl
+  }
+}
 
 function asRecord(value: unknown): UnknownRecord {
   return value && typeof value === "object" ? (value as UnknownRecord) : {}
@@ -71,13 +98,68 @@ function normalizePrContextResponse(value: unknown): PrContextResponse {
   }
 }
 
+async function throwApiError(res: Response, fallback: string): Promise<never> {
+  const body = asRecord(await res.json().catch(() => ({})))
+  const detail = body.detail
+  if (typeof detail === "string") {
+    throw new ApiError(detail, res.status)
+  }
+  const structured = asRecord(detail)
+  throw new ApiError(
+    asString(structured.message, fallback),
+    res.status,
+    asString(structured.code),
+    asString(structured.install_url),
+  )
+}
+
+export async function getGitHubAuthSession(): Promise<GitHubAuthSession> {
+  const res = await fetch(apiUrl("/api/auth/session"), { credentials: "include" })
+  if (!res.ok) {
+    throw new Error(`Failed to load GitHub login status: ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function requireGitHubAuth(): Promise<GitHubAuthSession> {
+  const session = await getGitHubAuthSession()
+  if (!session.authenticated) {
+    throw new Error("Sign in with GitHub before continuing.")
+  }
+  return session
+}
+
+export async function getGitHubInstallationsStatus(): Promise<{ installed: boolean; count: number }> {
+  const res = await fetch(apiUrl("/api/auth/github/installations/status"), { credentials: "include" })
+  if (!res.ok) {
+    return { installed: false, count: 0 }
+  }
+  return res.json()
+}
+
+export function getGitHubLoginUrl(): string {
+  return apiUrl("/api/auth/github/login")
+}
+
+export function getGitHubInstallUrl(): string {
+  return apiUrl("/api/auth/github/install")
+}
+
+export async function logoutGitHub(): Promise<void> {
+  const res = await fetch(apiUrl("/api/auth/logout"), { method: "POST", credentials: "include" })
+  if (!res.ok) {
+    throw new Error(`Failed to log out: ${res.status}`)
+  }
+}
+
 export async function analyzePr(
   prUrl: string,
   githubToken?: string,
 ): Promise<PrContextResponse> {
-  const res = await fetch("/api/pr/context", {
+  const res = await fetch(apiUrl("/api/pr/context"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    credentials: "include",
     body: JSON.stringify({
       pr_url: prUrl,
       github_token: githubToken || undefined,
@@ -85,17 +167,17 @@ export async function analyzePr(
   })
 
   if (!res.ok) {
-    const body = await res.json().catch(() => ({ detail: "Unknown error" }))
-    throw new Error(body.detail || `Request failed: ${res.status}`)
+    await throwApiError(res, `Request failed: ${res.status}`)
   }
 
   return normalizePrContextResponse(await res.json())
 }
 
 export async function getIntakeSummary(contextId: string): Promise<IntakeSummary> {
-  const res = await fetch("/api/review/intake", {
+  const res = await fetch(apiUrl("/api/review/intake"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    credentials: "include",
     body: JSON.stringify({ context_id: contextId }),
   })
 
@@ -113,7 +195,8 @@ export async function getFilePatch(
 ): Promise<FilePatchResponse> {
   const encodedFilename = encodeURIComponent(filename)
   const res = await fetch(
-    `/api/pr/context/${contextId}/files/${encodedFilename}/patch`,
+    apiUrl(`/api/pr/context/${contextId}/files/${encodedFilename}/patch`),
+    { credentials: "include" },
   )
 
   if (!res.ok) {
@@ -122,4 +205,109 @@ export async function getFilePatch(
   }
 
   return res.json()
+}
+
+export async function createReviewRun(
+  contextId: string,
+  localRepoRoot?: string,
+): Promise<{ run_id: string; status: string }> {
+  const res = await fetch(apiUrl("/api/review/runs"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({
+      context_id: contextId,
+      local_repo_root: localRepoRoot || undefined,
+    }),
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ detail: "Unknown error" }))
+    throw new Error(body.detail || `Request failed: ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function getReviewRun(
+  runId: string,
+): Promise<ReviewRunStatusResponse> {
+  const res = await fetch(apiUrl(`/api/review/runs/${encodeURIComponent(runId)}`), { credentials: "include" })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ detail: "Unknown error" }))
+    throw new Error(body.detail || `Request failed: ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function cancelReviewRun(
+  runId: string,
+): Promise<{ run_id: string; status: string }> {
+  const res = await fetch(
+    apiUrl(`/api/review/runs/${encodeURIComponent(runId)}/cancel`),
+    { method: "POST", credentials: "include" },
+  )
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ detail: "Unknown error" }))
+    throw new Error(body.detail || `Request failed: ${res.status}`)
+  }
+  return res.json()
+}
+
+const TERMINAL_EVENTS = new Set([
+  "run.completed",
+  "run.failed",
+  "run.cancelled",
+])
+
+export function subscribeToReviewRun(
+  runId: string,
+  onEvent: (event: ReviewRunEvent) => void,
+  onOpen?: () => void,
+  onError?: (message: string) => void,
+): () => void {
+  const wsBase = API_BASE
+    ? new URL(API_BASE, window.location.origin)
+    : new URL(window.location.origin)
+  wsBase.protocol = wsBase.protocol === "https:" ? "wss:" : "ws:"
+  wsBase.pathname = `/ws/review-runs/${encodeURIComponent(runId)}`
+  wsBase.search = ""
+  wsBase.hash = ""
+  const ws = new WebSocket(wsBase)
+  let receivedTerminalEvent = false
+  let disposed = false
+
+  ws.addEventListener("open", () => {
+    onOpen?.()
+  })
+
+  ws.addEventListener("message", (msg) => {
+    try {
+      const data = JSON.parse(msg.data) as ReviewRunEvent
+      onEvent(data)
+      if (TERMINAL_EVENTS.has(data.type)) {
+        receivedTerminalEvent = true
+        ws.close()
+      }
+    } catch {
+      // ignore malformed messages
+    }
+  })
+
+  ws.addEventListener("error", () => {
+    if (!disposed) {
+      onError?.("Live progress connection failed. The review may still be running on the backend.")
+    }
+  })
+
+  ws.addEventListener("close", () => {
+    if (!receivedTerminalEvent && !disposed) {
+      onError?.("Live progress connection closed before the review finished.")
+    }
+  })
+
+  return () => {
+    disposed = true
+    if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+      ws.close()
+    }
+  }
 }

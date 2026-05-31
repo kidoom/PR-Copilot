@@ -1,6 +1,12 @@
-from fastapi import APIRouter, HTTPException
+import os
+
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from backend.api.routes.github_auth import (
+    get_authenticated_github_session,
+)
+from backend.domain.github.auth import GitHubAuthError, get_github_auth_service
 from backend.domain.github.url_parser import parse_pr_url
 from backend.domain.github.client import GitHubClient, GitHubAPIError
 from backend.domain.pr_context.context_manager import (
@@ -20,14 +26,22 @@ class ContextRequest(BaseModel):
 
 
 @router.post("/context")
-async def create_context(req: ContextRequest):
+async def create_context(req: ContextRequest, request: Request):
     """Create a PRContext from a GitHub PR URL."""
     try:
         parsed = parse_pr_url(req.pr_url)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    client = GitHubClient(token=req.github_token)
+    session = await get_authenticated_github_session(request)
+    session_token = session.access_token if session is not None else None
+    token = (
+        session_token
+        or req.github_token
+        or os.environ.get("PR_COPILOT_GITHUB_TOKEN")
+        or os.environ.get("GITHUB_TOKEN")
+    )
+    client = GitHubClient(token=token)
     try:
         try:
             pr_raw = await client.get_pr(parsed.owner, parsed.repo, parsed.pull_number)
@@ -38,8 +52,31 @@ async def create_context(req: ContextRequest):
             if status == 401:
                 raise HTTPException(status_code=401, detail=e.message)
             if status == 403:
-                raise HTTPException(status_code=429, detail=e.message)
+                if e.error_category == "rate_limit":
+                    raise HTTPException(status_code=429, detail=e.message)
+                raise HTTPException(status_code=403, detail=e.message)
             if status == 404:
+                if session is not None:
+                    try:
+                        access = await get_github_auth_service().repository_access(
+                            session.session_id,
+                            owner=parsed.owner,
+                            repo=parsed.repo,
+                        )
+                    except GitHubAuthError:
+                        access = {"authorized": False}
+                    if not access["authorized"]:
+                        raise HTTPException(
+                            status_code=403,
+                            detail={
+                                "code": "github_app_repository_access_required",
+                                "message": (
+                                    "Connect this repository to the GitHub App, "
+                                    "then try the PR analysis again."
+                                ),
+                                "install_url": "/api/auth/github/install",
+                            },
+                        )
                 raise HTTPException(status_code=404, detail=e.message)
             raise HTTPException(status_code=502, detail=e.message)
     finally:

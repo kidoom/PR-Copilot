@@ -4,9 +4,10 @@ import asyncio
 import os
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from backend.api.routes.github_auth import get_authenticated_github_token
 from backend.agent.runtime.main_runner import run_main_agent
 from backend.agent.tools.repo_context.provider.models import PRIdentity
 from backend.agent.runtime.run_manager import RunManager, RunNotFoundError
@@ -30,7 +31,7 @@ class CreateRunRequest(BaseModel):
 
 
 @router.post("")
-async def create_run(req: CreateRunRequest):
+async def create_run(req: CreateRunRequest, request: Request):
     ctx = get_context(req.context_id)
     if ctx is None:
         raise HTTPException(status_code=404, detail=f"Context not found: {req.context_id}")
@@ -40,7 +41,21 @@ async def create_run(req: CreateRunRequest):
 
     run = _run_manager.create_run(req.context_id)
 
-    asyncio.create_task(_execute_run(run.run_id, req.context_id, task_plan, req.local_repo_root))
+    token = (
+        await get_authenticated_github_token(request)
+        or os.environ.get("PR_COPILOT_GITHUB_TOKEN")
+        or os.environ.get("GITHUB_TOKEN")
+    )
+    task = asyncio.create_task(
+        _execute_run(
+            run.run_id,
+            req.context_id,
+            task_plan,
+            req.local_repo_root,
+            token,
+        )
+    )
+    _run_manager.register_execution_task(run.run_id, task)
 
     return {"run_id": run.run_id, "status": run.status.value}
 
@@ -50,6 +65,7 @@ async def _execute_run(
     context_id: str,
     task_plan: dict[str, Any],
     local_repo_root: str | None = None,
+    token: str | None = None,
 ) -> None:
     ctx = get_context(context_id)
     pr_context = ctx
@@ -76,7 +92,7 @@ async def _execute_run(
         run_manager=_run_manager,
         workspace_manager=deps.workspace_manager,
         pr_identity=pr_identity,
-        token=os.environ.get("PR_COPILOT_GITHUB_TOKEN") or os.environ.get("GITHUB_TOKEN"),
+        token=token,
     )
 
 

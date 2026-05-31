@@ -5,6 +5,7 @@ import json
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from backend.agent.runtime.events import RunStatus
+from backend.api.routes.github_auth import get_authenticated_github_session
 from backend.api.routes.review_runs import _run_manager
 from backend.agent.runtime.run_manager import RunNotFoundError
 
@@ -13,6 +14,10 @@ router = APIRouter(tags=["review-ws"])
 
 @router.websocket("/ws/review-runs/{run_id}")
 async def review_run_ws(websocket: WebSocket, run_id: str) -> None:
+    if await get_authenticated_github_session(websocket) is None:
+        await websocket.close(code=4401, reason="GitHub login required")
+        return
+
     if not _run_manager.has_run(run_id):
         await websocket.close(code=4004, reason="Run not found")
         return

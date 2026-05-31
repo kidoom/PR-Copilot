@@ -23,6 +23,9 @@ import {
   FolderOpen,
   Layers,
   X,
+  Bot,
+  UserRound,
+  LogOut,
 } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
@@ -44,8 +47,26 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { analyzePr, getIntakeSummary, getFilePatch } from "@/api"
-import type { PrContextResponse, FileEntry, IntakeSummary, FilePatchResponse } from "@/types"
+import {
+  ApiError,
+  analyzePr,
+  getGitHubAuthSession,
+  getGitHubInstallationsStatus,
+  getGitHubInstallUrl,
+  getGitHubLoginUrl,
+  getIntakeSummary,
+  getFilePatch,
+  logoutGitHub,
+  requireGitHubAuth,
+} from "@/api"
+import type {
+  PrContextResponse,
+  FileEntry,
+  IntakeSummary,
+  FilePatchResponse,
+  GitHubAuthSession,
+} from "@/types"
+import { ReviewPanel } from "@/components/ReviewPanel"
 
 function getStatusBadgeVariant(status: string) {
   if (status === "added") return "default" as const
@@ -94,14 +115,37 @@ function getRiskHintClassName(hint: string) {
   return "border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300"
 }
 
+function getInitialAuthError(): string | null {
+  const params = new URLSearchParams(window.location.search)
+  const githubAuth = params.get("github_auth")
+  const githubInstall = params.get("github_install")
+  if (githubAuth === "denied") return "GitHub authorization was cancelled."
+  if (githubAuth === "failed") return "GitHub sign-in failed. Please try again."
+  if (githubAuth === "unavailable") return "GitHub sign-in is temporarily unavailable. Please try again later."
+  if (githubInstall === "denied") return "GitHub repository connection was cancelled."
+  if (githubInstall === "unavailable") return "GitHub repository connection is temporarily unavailable. Please try again later."
+  return null
+}
+
+function getInitialAuthNotice(): string | null {
+  const params = new URLSearchParams(window.location.search)
+  return params.get("github_install") === "success"
+    ? "GitHub repository access was updated. You can analyze the pull request now."
+    : null
+}
+
 function getErrorGuidance(error: string): string {
   const lower = error.toLowerCase()
+  if (lower.includes("temporarily unavailable") || lower.includes("authorization was cancelled"))
+    return "Try again later or contact your workspace administrator."
+  if (lower.includes("sign in with github"))
+    return "Use the Sign in with GitHub button in the top bar, then try again."
   if (lower.includes("404") || lower.includes("not found"))
     return "Check that the PR URL is correct and the repository exists on GitHub."
   if (lower.includes("401") || lower.includes("403") || lower.includes("unauthorized"))
-    return "The repository may be private. Try providing a GitHub token with repo access."
+    return "The repository may be private or your GitHub authorization expired. Sign in with GitHub and try again."
   if (lower.includes("rate"))
-    return "GitHub API rate limit exceeded. Wait a moment or provide a GitHub token."
+    return "GitHub API rate limit exceeded. Sign in with GitHub and try again."
   if (lower.includes("network") || lower.includes("fetch"))
     return "Could not reach the backend. Make sure the server is running on port 8000."
   return "Check the PR URL and ensure the repository is accessible."
@@ -790,9 +834,15 @@ function DiffSidebar({
 function App() {
   const [prUrl, setPrUrl] = useState("")
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(getInitialAuthError)
+  const [notice, setNotice] = useState<string | null>(getInitialAuthNotice)
+  const [repositoryAccessRequired, setRepositoryAccessRequired] = useState(false)
   const [result, setResult] = useState<PrContextResponse | null>(null)
   const [intake, setIntake] = useState<IntakeSummary | null>(null)
+  const [showReviewPanel, setShowReviewPanel] = useState(false)
+  const [githubSession, setGitHubSession] = useState<GitHubAuthSession | null>(null)
+  const [githubSessionLoading, setGitHubSessionLoading] = useState(true)
+  const [appInstalled, setAppInstalled] = useState(false)
 
   // Sidebar state
   const [selectedFile, setSelectedFile] = useState<FileEntry | null>(null)
@@ -800,6 +850,59 @@ function App() {
   const [patchData, setPatchData] = useState<FilePatchResponse | null>(null)
   const [patchError, setPatchError] = useState<string | null>(null)
   const patchRequestId = useRef(0)
+
+  const refreshGitHubSession = useCallback(async () => {
+    setGitHubSessionLoading(true)
+    try {
+      setGitHubSession(await getGitHubAuthSession())
+    } catch {
+      setGitHubSession(null)
+    } finally {
+      setGitHubSessionLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const githubAuth = params.get("github_auth")
+    const githubInstall = params.get("github_install")
+    if (githubAuth || githubInstall) {
+      params.delete("github_auth")
+      params.delete("github_install")
+      const query = params.toString()
+      window.history.replaceState({}, "", `${window.location.pathname}${query ? `?${query}` : ""}`)
+    }
+    let active = true
+    void getGitHubAuthSession()
+      .then((session) => {
+        if (active) setGitHubSession(session)
+      })
+      .catch(() => {
+        if (active) setGitHubSession(null)
+      })
+      .finally(() => {
+        if (active) setGitHubSessionLoading(false)
+      })
+    return () => {
+      active = false
+    }
+  }, [])
+
+  // Check GitHub App installation status when session is authenticated
+  useEffect(() => {
+    if (!githubSession?.authenticated) return
+    let active = true
+    getGitHubInstallationsStatus()
+      .then((status) => {
+        if (active) setAppInstalled(status.installed)
+      })
+      .catch(() => {
+        if (active) setAppInstalled(false)
+      })
+    return () => {
+      active = false
+    }
+  }, [githubSession?.authenticated])
 
   // Lock body scroll when sidebar is open on mobile
   useEffect(() => {
@@ -818,10 +921,23 @@ function App() {
       : error
         ? "error"
         : "empty"
+  const isAppInstalled = Boolean(githubSession?.authenticated && appInstalled)
+
+  const ensureGitHubLogin = useCallback(async () => {
+    try {
+      const session = await requireGitHubAuth()
+      setGitHubSession(session)
+      return true
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Sign in with GitHub before continuing.")
+      return false
+    }
+  }, [])
 
   const handleFileClick = useCallback(
     async (file: FileEntry) => {
       if (!result) return
+      if (!(await ensureGitHubLogin())) return
       setSelectedFile(file)
       setPatchLoading(true)
       setPatchData(null)
@@ -840,7 +956,7 @@ function App() {
         }
       }
     },
-    [result],
+    [ensureGitHubLogin, result],
   )
 
   const closeSidebar = useCallback(() => {
@@ -854,8 +970,11 @@ function App() {
       setError("A GitHub PR URL is required to start analysis.")
       return
     }
+    if (!(await ensureGitHubLogin())) return
     setLoading(true)
     setError(null)
+    setNotice(null)
+    setRepositoryAccessRequired(false)
     setResult(null)
     setIntake(null)
     closeSidebar()
@@ -871,9 +990,27 @@ function App() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Request failed"
       setError(msg)
+      setRepositoryAccessRequired(
+        e instanceof ApiError && e.code === "github_app_repository_access_required",
+      )
     } finally {
       setLoading(false)
     }
+  }
+
+  const handleGitHubLogout = async () => {
+    try {
+      await logoutGitHub()
+      await refreshGitHubSession()
+      setNotice(null)
+      setRepositoryAccessRequired(false)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to log out")
+    }
+  }
+
+  const handleGitHubLogin = () => {
+    window.location.assign(getGitHubLoginUrl())
   }
 
   return (
@@ -889,12 +1026,55 @@ function App() {
             </Badge>
           </div>
           <div className="flex items-center gap-2">
-            <Badge variant="secondary" className="hidden text-xs sm:inline-flex">
-              Backend: localhost:8000
-            </Badge>
-            <Badge variant="outline" className="hidden text-xs md:inline-flex">
-              Model: GPT-4
-            </Badge>
+            {githubSession?.authenticated && githubSession.user ? (
+              <>
+                <a
+                  href={githubSession.user.html_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="hidden items-center gap-2 text-xs text-muted-foreground sm:flex"
+                >
+                  {githubSession.user.avatar_url ? (
+                    <img
+                      src={githubSession.user.avatar_url}
+                      alt=""
+                      className="h-6 w-6 rounded-full border"
+                    />
+                  ) : (
+                    <UserRound className="h-4 w-4" />
+                  )}
+                  <span>{githubSession.user.login}</span>
+                </a>
+                <Button
+                  variant={isAppInstalled ? "secondary" : "outline"}
+                  size="sm"
+                  onClick={() => window.location.assign(getGitHubInstallUrl())}
+                  title="Install or manage GitHub App repository access"
+                >
+                  <ExternalLink className="mr-2 h-4 w-4" />
+                  {isAppInstalled ? "已安装" : "Repositories"}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={handleGitHubLogout}
+                  title="Sign out of GitHub"
+                >
+                  <LogOut className="h-4 w-4" />
+                </Button>
+              </>
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={githubSessionLoading}
+                onClick={handleGitHubLogin}
+                title="Sign in with GitHub"
+              >
+                <UserRound className="mr-2 h-4 w-4" />
+                Sign in with GitHub
+              </Button>
+            )}
           </div>
         </div>
       </header>
@@ -911,6 +1091,8 @@ function App() {
                 onChange={(e) => {
                   setPrUrl(e.target.value)
                   if (error) setError(null)
+                  if (notice) setNotice(null)
+                  if (repositoryAccessRequired) setRepositoryAccessRequired(false)
                 }}
                 onKeyDown={(e) => e.key === "Enter" && !loading && handleAnalyze()}
                 disabled={loading}
@@ -929,6 +1111,19 @@ function App() {
               )}
               {loading ? "Analyzing..." : "Analyze PR"}
             </Button>
+            <Button
+              variant={showReviewPanel ? "secondary" : "default"}
+              disabled={!result || loading}
+              onClick={async () => {
+                if (showReviewPanel || (await ensureGitHubLogin())) {
+                  setShowReviewPanel(!showReviewPanel)
+                }
+              }}
+              className="sm:w-auto"
+            >
+              <Bot className="mr-2 h-4 w-4" />
+              {showReviewPanel ? "Hide Review" : "AI Review"}
+            </Button>
           </div>
 
           {loading && (
@@ -939,22 +1134,55 @@ function App() {
           )}
         </div>
 
-        <section key={contentState}>
-          {contentState === "loading" && <LoadingState />}
-          {contentState === "error" && error && (
-            <Alert variant="destructive">
-              <AlertTriangle className="h-4 w-4" />
-              <AlertDescription>
-                <div className="font-medium">{error}</div>
-                <div className="mt-1 text-xs opacity-80">
-                  {getErrorGuidance(error)}
-                </div>
-              </AlertDescription>
-            </Alert>
-          )}
-          {contentState === "empty" && <EmptyState />}
-          {contentState === "result" && result && (
-            <ResultDashboard result={result} intake={intake} onFileClick={handleFileClick} />
+        {notice && (
+          <Alert className="mb-6">
+            <CheckCircle className="h-4 w-4" />
+            <AlertDescription>{notice}</AlertDescription>
+          </Alert>
+        )}
+
+        <section key={contentState} className="flex min-h-0 gap-0">
+          <div className={`min-w-0 ${showReviewPanel && result ? "w-[60%]" : "w-full"}`}>
+            {contentState === "loading" && <LoadingState />}
+            {contentState === "error" && error && (
+              <Alert variant="destructive">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertDescription>
+                  <div className="font-medium">{error}</div>
+                  <div className="mt-1 text-xs opacity-80">
+                    {getErrorGuidance(error)}
+                  </div>
+                  {repositoryAccessRequired && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-3"
+                      onClick={() => window.location.assign(getGitHubInstallUrl())}
+                    >
+                      <ExternalLink className="mr-2 h-4 w-4" />
+                      Connect repositories
+                    </Button>
+                  )}
+                </AlertDescription>
+              </Alert>
+            )}
+            {contentState === "empty" && <EmptyState />}
+            {contentState === "result" && result && (
+              <ResultDashboard result={result} intake={intake} onFileClick={handleFileClick} />
+            )}
+          </div>
+          {showReviewPanel && result && (
+            <div className="sticky top-20 h-[calc(100vh-6.5rem)] w-[40%] shrink-0 self-start overflow-hidden">
+              <ReviewPanel
+                contextId={result.context_id}
+                onClose={() => setShowReviewPanel(false)}
+                ensureGitHubLogin={ensureGitHubLogin}
+                onFileClick={(filename) => {
+                  const file = result.files.find((f) => f.filename === filename)
+                  if (file) handleFileClick(file)
+                }}
+              />
+            </div>
           )}
         </section>
       </main>

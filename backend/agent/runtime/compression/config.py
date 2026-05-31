@@ -15,8 +15,8 @@ class CompressionConfig:
     auto_compact_enabled: bool = True
     reactive_compact_enabled: bool = True
 
-    # Context window size (tokens)
-    context_window_tokens: int = 128000
+    # Context window size (tokens) — mimo-v2.5-pro is 128K
+    context_window_tokens: int = 128_000
 
     # Buffer for compact summary (tokens)
     compact_max_summary_tokens: int = 4000
@@ -25,10 +25,10 @@ class CompressionConfig:
     auto_compact_buffer_tokens: int = 8000
 
     # Recent tool results to keep unchanged in MicroCompact
-    micro_compact_recent_results: int = 3
+    micro_compact_recent_results: int = 10
 
     # Minimum character count for MicroCompact to replace a tool result
-    micro_compact_min_chars: int = 1000
+    micro_compact_min_chars: int = 8000
 
     # Number of recent messages to preserve in compact summary
     compact_recent_messages: int = 10

@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -49,7 +50,7 @@ def _verify_local_identity(
     try:
         result = _run_git(["remote", "get-url", "origin"], cwd=repo_root, timeout=5)
         remote = result.stdout.strip() if result.returncode == 0 else ""
-        if f"{identity.owner}/{identity.repo}" not in remote.lower():
+        if f"{identity.owner}/{identity.repo}".lower() not in remote.lower():
             return False, f"Remote origin does not match {identity.owner}/{identity.repo}"
     except (OSError, subprocess.TimeoutExpired):
         return False, "Cannot read git remote"
@@ -91,15 +92,11 @@ def _prepare_temp_clone(
     temp_root: str,
     token: str | None = None,
 ) -> tuple[str | None, str | None]:
+    os.makedirs(temp_root, exist_ok=True)
     clone_dir = os.path.join(
         temp_root,
-        f"{identity.owner}__{identity.repo}__{identity.head_sha[:12]}",
+        f"{identity.owner}__{identity.repo}__{identity.head_sha[:12]}__{uuid.uuid4().hex[:8]}",
     )
-
-    if os.path.exists(clone_dir):
-        shutil.rmtree(clone_dir, ignore_errors=True)
-
-    os.makedirs(clone_dir, exist_ok=True)
 
     askpass_dir: str | None = None
     try:

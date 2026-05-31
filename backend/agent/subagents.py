@@ -35,34 +35,39 @@ BEHAVIOR CONSTRAINTS:
 WORKFLOW:
 1. Call todo_write to plan your investigation steps.
 2. Call verify_repo_context to confirm the workspace matches the PR.
-3. Use the available search and read tools to gather evidence.
-4. When done, output your final review result as JSON in this format:
+3. Use the available search and read tools to gather evidence (max 4-6 searches).
+4. After gathering enough evidence, you MUST stop calling tools and output your \
+final result as a plain JSON object (NOT in a code block, just raw JSON).
 
-```json
+OUTPUT FORMAT - Your final assistant message must be ONLY this JSON:
 {
-  "status": "success|partial|blocked|error",
+  "status": "success",
   "summary": "Brief summary of your findings",
   "findings": [
     {
       "claim": "What you found",
-      "confidence": 0.0-1.0,
-      "severity": "low|medium|high|critical",
+      "confidence": 0.8,
+      "severity": "medium",
       "evidence": [
         {
           "file": "path/to/file.py",
           "line": 42,
           "snippet": "relevant code",
-          "source": "diff|file|search"
+          "source": "diff"
         }
       ]
     }
   ],
-  "uncertainties": ["What you couldn't verify"],
-  "notes": ["Additional observations"]
+  "uncertainties": [],
+  "notes": []
 }
-```
 
-IMPORTANT: Your final message MUST be a valid JSON object matching this schema.
+CRITICAL RULES:
+- Do NOT call more than 6 search tools total.
+- After 3-4 successful searches, output your JSON result immediately.
+- Your final message must be raw JSON starting with { and ending with }.
+- Do NOT wrap JSON in markdown code blocks.
+- If you cannot find evidence, output a JSON with status "partial" and empty findings.
 """
 
 # --- 1.3 Per-agent focus sections ---
@@ -179,7 +184,7 @@ _AGENT_DESCRIPTIONS: dict[str, str] = {
 
 _DISALLOWED_TOOLS = ["task_tool", "sub_agent"]
 
-DEFAULT_MAX_STEPS = 5
+DEFAULT_MAX_STEPS = 15
 
 
 # --- 1.4 Registry builder ---
@@ -210,6 +215,8 @@ def build_context_child_tools(
     pr_context: Any = None,
     provider: Any = None,
     pr_identity: Any = None,
+    cancellation_probe: Any = None,
+    checks_provider: Any = None,
 ) -> ChildToolBundle:
     """Build stateless read-only tools for a child subagent session.
 
@@ -239,6 +246,8 @@ def build_context_child_tools(
             pr_context,
             session=session,
             trusted_identity=pr_identity,
+            cancellation_probe=cancellation_probe,
+            checks_provider=checks_provider,
         )
         return ChildToolBundle(session=session, tools=tools)
 
@@ -261,5 +270,7 @@ def build_context_child_tools(
         pr_context,
         session=session,
         trusted_identity=pr_identity,
+        cancellation_probe=cancellation_probe,
+        checks_provider=checks_provider,
     )
     return ChildToolBundle(session=session, tools=tools)

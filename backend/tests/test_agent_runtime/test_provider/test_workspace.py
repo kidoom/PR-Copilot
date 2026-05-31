@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import tempfile
+from unittest.mock import patch
 
 import pytest
 
@@ -13,6 +14,7 @@ from backend.agent.tools.repo_context.provider.models import (
 )
 from backend.agent.tools.repo_context.provider.workspace import (
     RepoWorkspaceManager,
+    _prepare_temp_clone,
     _verify_local_identity,
     _create_askpass_script,
     _cleanup_askpass,
@@ -66,6 +68,33 @@ class TestAskpassHelper:
         assert os.path.exists(script_path)
         _cleanup_askpass(askpass_dir)
         assert not os.path.exists(askpass_dir)
+
+
+class TestTempClone:
+    def test_stale_identity_directory_does_not_block_fresh_clone(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            identity = PRIdentity(owner="owner", repo="repo", head_sha="abc123def456")
+            stale_dir = os.path.join(tmpdir, "owner__repo__abc123def456")
+            os.makedirs(stale_dir)
+            with open(os.path.join(stale_dir, "stale.txt"), "w") as f:
+                f.write("stale")
+
+            def fake_run_git(args, *, cwd, env=None, timeout=60):
+                if args[0] == "clone":
+                    os.makedirs(args[-1])
+                return subprocess.CompletedProcess(["git", *args], 0, "", "")
+
+            with patch(
+                "backend.agent.tools.repo_context.provider.workspace._run_git",
+                side_effect=fake_run_git,
+            ):
+                clone_dir, error = _prepare_temp_clone(identity, tmpdir)
+
+            assert error is None
+            assert clone_dir is not None
+            assert clone_dir != stale_dir
+            assert os.path.isdir(clone_dir)
+            assert os.path.isfile(os.path.join(stale_dir, "stale.txt"))
 
 
 class TestRepoWorkspaceManager:

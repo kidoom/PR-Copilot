@@ -10,6 +10,18 @@ export interface PrOverview {
   head_sha: string
 }
 
+export interface GitHubUser {
+  login: string
+  name: string
+  avatar_url: string
+  html_url: string
+}
+
+export interface GitHubAuthSession {
+  authenticated: boolean
+  user: GitHubUser | null
+}
+
 export interface FileEntry {
   filename: string
   status: string
@@ -82,4 +94,106 @@ export interface IntakeSummary {
   file_type_distribution: Record<string, number>
   top_directories: TopDirectory[]
   notable_signals: string[]
+}
+
+export type ReviewRunStatus =
+  | "queued"
+  | "running"
+  | "cancelling"
+  | "cancelled"
+  | "completed"
+  | "failed"
+
+export type ReviewRunEventType =
+  | "run.started"
+  | "message.delta"
+  | "tool.call"
+  | "tool.result"
+  | "subagent.started"
+  | "subagent.completed"
+  | "run.completed"
+  | "run.failed"
+  | "run.cancelled"
+
+export interface ReviewRunEvent {
+  event_id: string
+  run_id: string
+  type: ReviewRunEventType
+  sequence: number
+  created_at: string
+  payload: Record<string, unknown>
+}
+
+export interface EvidenceRef {
+  file: string
+  line?: number
+  snippet?: string
+  source?: string
+}
+
+export interface NormalizedFinding {
+  claim: string
+  confidence: number
+  severity: "informational" | "info" | "low" | "medium" | "high" | "critical"
+  evidence: EvidenceRef[]
+  fingerprint: string
+}
+
+export interface TaskSummary {
+  task_id: string
+  task_type: string
+  agent_type: string
+  child_session_id: string
+  execution_status: string
+  parse_status: string
+  validation_errors: string[]
+}
+
+export interface FinalReviewResult {
+  status: string
+  summary: string
+  findings: NormalizedFinding[]
+  uncertainties: string[]
+  notes: string[]
+  task_summaries: TaskSummary[]
+  raw_output: string
+  steps: number
+  stopped_by_max_steps: boolean
+  token_usage: { input_tokens: number; output_tokens: number }
+}
+
+export interface ReviewRunStatusResponse {
+  run_id: string
+  context_id: string
+  status: ReviewRunStatus
+  final_result?: FinalReviewResult
+  error_summary?: string
+}
+
+export interface ToolEventPayload {
+  agent_kind: string
+  agent_type: string
+  task_id: string
+  child_session_id: string
+  tool_name: string
+  tool_use_id: string
+  input_summary?: unknown
+  output_summary?: unknown
+  is_error?: boolean
+}
+
+export interface SubagentEventPayload {
+  task_id: string
+  task_type: string
+  agent_type: string
+  child_session_id: string
+  status?: string
+  stopped_by_max_steps?: boolean
+  validation_errors?: string[]
+  error?: string
+}
+
+export interface MessageDeltaPayload {
+  text: string
+  agent_type: string
 }

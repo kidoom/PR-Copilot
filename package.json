@@ -1,0 +1,12 @@
+{
+  "name": "pr-copilot",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n backend,frontend -c blue,green \"python -m uvicorn backend.main:app --host localhost --port 8000 --reload\" \"npm run dev --prefix frontend\"",
+    "dev:backend": "python -m uvicorn backend.main:app --host localhost --port 8000 --reload",
+    "dev:frontend": "npm run dev --prefix frontend"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
+  }
+}

@@ -5,6 +5,7 @@ import json
 from typing import Any, Callable, Awaitable
 
 from backend.agent.runtime.agent_def import AgentRegistry
+from backend.agent.runtime.cancellation import CancellationProbe, Cancelled
 from backend.agent.runtime.review_result import ReviewResult, parse_review_result, validate_review_result
 from backend.agent.runtime.sub_agent import SubAgentResult
 from backend.agent.tools.protocol import RiskLevel
@@ -25,13 +26,16 @@ class TaskTool:
         runner: Runner,
         agent_registry: AgentRegistry | None = None,
         agent_types: list[str] | None = None,
-        max_concurrent_tasks: int = 4,
+        max_concurrent_tasks: int = 6,
+        cancellation_probe: CancellationProbe | None = None,
     ) -> None:
         self._runner = runner
         self._agent_types = agent_types or (agent_registry.names() if agent_registry is not None else ["default"])
         if not self._agent_types:
             self._agent_types = ["default"]
         self._max_concurrent_tasks = max(1, int(max_concurrent_tasks))
+        self._cancellation_probe = cancellation_probe
+        self._last_batch_results: list[dict[str, Any]] | None = None
 
     @property
     def name(self) -> str:
@@ -221,6 +225,15 @@ class TaskTool:
         pending: list[Awaitable[None]] = []
 
         for index, raw_task in enumerate(tasks):
+            # Stop starting new sibling SubAgents after cancellation (task 4.5)
+            if self._cancellation_probe is not None and self._cancellation_probe.is_cancelled():
+                results[index] = {
+                    "index": index,
+                    "status": "cancelled",
+                    "error": "Dispatch cancelled: run is being cancelled",
+                }
+                continue
+
             if not isinstance(raw_task, dict):
                 results[index] = {
                     "index": index,
@@ -231,9 +244,23 @@ class TaskTool:
             pending.append(_dispatch_one(index, raw_task))
 
         if pending:
-            await asyncio.gather(*pending)
+            # Use return_exceptions=True to handle cancellation gracefully
+            gather_results = await asyncio.gather(*pending, return_exceptions=True)
+            # Check if any sibling raised Cancelled (task 4.6)
+            for i, result_or_exc in enumerate(gather_results):
+                if isinstance(result_or_exc, Cancelled):
+                    # Mark remaining pending results as cancelled
+                    for j in range(len(results)):
+                        if results[j] is None:
+                            results[j] = {
+                                "index": j,
+                                "status": "cancelled",
+                                "error": "Cancelled: run is being cancelled",
+                            }
 
-        return [r for r in results if r is not None]
+        final_results = [r for r in results if r is not None]
+        self._last_batch_results = final_results  # task 5.8: capture for aggregation
+        return final_results
 
     async def run(
         self,
