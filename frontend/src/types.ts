@@ -135,6 +135,60 @@ export interface TaskSummary {
   execution_status: string
   parse_status: string
   validation_errors: string[]
+  // Accounting fields (optional, backward compatible)
+  model_id?: string
+  model_calls?: number
+  input_tokens?: number
+  output_tokens?: number
+  observation_tokens?: number
+  elapsed_ms?: number
+  retries?: number
+  fallback_used?: boolean
+  failure_reason?: string
+}
+
+export interface CoverageEntry {
+  filename: string
+  lane: "baseline" | "specialist"
+  state: "planned" | "reviewed" | "partial" | "omitted" | "cancelled" | "timeout" | "failed" | "unplanned"
+  task_id: string
+  reason: string
+  is_high_priority: boolean
+  priority_score: number
+  truncated: boolean
+  estimated_tokens: number
+  actual_tokens: number
+}
+
+export interface CoverageManifest {
+  entries: Record<string, CoverageEntry>
+}
+
+export interface OperationUsage {
+  operation_type: string
+  model_id: string
+  model_calls: number
+  input_tokens: number
+  output_tokens: number
+  observation_tokens: number
+  elapsed_ms: number
+  retries: number
+  fallback_used: boolean
+  task_id: string
+  agent_type: string
+}
+
+export interface RunUsage {
+  model_id: string
+  total_model_calls: number
+  total_input_tokens: number
+  total_output_tokens: number
+  total_observation_tokens: number
+  total_elapsed_ms: number
+  total_retries: number
+  total_fallbacks: number
+  task_count: number
+  operations: OperationUsage[]
 }
 
 export interface FinalReviewResult {
@@ -148,6 +202,17 @@ export interface FinalReviewResult {
   steps: number
   stopped_by_max_steps: boolean
   token_usage: { input_tokens: number; output_tokens: number }
+  // Coverage and usage fields (optional, backward compatible)
+  coverage?: CoverageManifest
+  run_usage?: RunUsage
+  uncovered_high_priority_paths?: string[]
+  coverage_counts?: {
+    baseline_reviewed?: number
+    baseline_partial?: number
+    baseline_omitted?: number
+    baseline_failed?: number
+    uncovered_high_priority?: number
+  }
 }
 
 export interface ReviewRunStatusResponse {

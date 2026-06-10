@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react"
-import { X, Play, Loader2, AlertTriangle, CheckCircle2 } from "lucide-react"
+import { X, Play, Loader2, AlertTriangle, CheckCircle2, AlertCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { TerminalStream } from "./TerminalStream"
 import { FindingCard, SeveritySummary } from "./FindingCard"
@@ -247,10 +247,14 @@ export function ReviewPanel({ contextId, onClose, onFileClick }: ReviewPanelProp
             <div className="scrollbar-hidden min-h-0 flex-1 overflow-y-auto overscroll-contain">
               <div className="border-b px-3 py-3">
                 <div className="flex items-start gap-2">
-                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-green-600" />
+                  {finalResult.status === "partial" ? (
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-yellow-600" />
+                  ) : (
+                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-green-600" />
+                  )}
                   <div className="min-w-0">
-                    <p className="text-xs font-semibold text-green-700 dark:text-green-400">
-                      Review completed
+                    <p className={`text-xs font-semibold ${finalResult.status === "partial" ? "text-yellow-700 dark:text-yellow-400" : "text-green-700 dark:text-green-400"}`}>
+                      Review {finalResult.status === "partial" ? "partially completed" : "completed"}
                     </p>
                     <p className="mt-1 break-words text-xs text-muted-foreground">
                       {finalResult.summary}
@@ -267,8 +271,119 @@ export function ReviewPanel({ contextId, onClose, onFileClick }: ReviewPanelProp
                       <span>Step limit reached</span>
                     </>
                   )}
+                  {finalResult.coverage_counts?.baseline_reviewed != null && (
+                    <>
+                      <span aria-hidden="true">|</span>
+                      <span>{finalResult.coverage_counts.baseline_reviewed} files reviewed</span>
+                    </>
+                  )}
+                  {finalResult.coverage_counts?.uncovered_high_priority != null && finalResult.coverage_counts.uncovered_high_priority > 0 && (
+                    <>
+                      <span aria-hidden="true">|</span>
+                      <span className="text-yellow-600 dark:text-yellow-400">
+                        {finalResult.coverage_counts.uncovered_high_priority} uncovered
+                      </span>
+                    </>
+                  )}
+                  {finalResult.run_usage && (
+                    <>
+                      <span aria-hidden="true">|</span>
+                      <span>{finalResult.run_usage.total_model_calls} model calls</span>
+                      <span aria-hidden="true">|</span>
+                      <span>{Math.round((finalResult.run_usage.total_input_tokens + finalResult.run_usage.total_output_tokens) / 1000)}k tokens</span>
+                    </>
+                  )}
                 </div>
               </div>
+
+              {/* Coverage summary */}
+              {finalResult.coverage_counts && finalResult.coverage_counts.baseline_reviewed != null && (
+                <div className="border-b px-3 py-2">
+                  <div className="flex flex-wrap gap-1.5">
+                    {finalResult.coverage_counts.baseline_reviewed > 0 && (
+                      <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">
+                        {finalResult.coverage_counts.baseline_reviewed} reviewed
+                      </span>
+                    )}
+                    {finalResult.coverage_counts.baseline_partial != null && finalResult.coverage_counts.baseline_partial > 0 && (
+                      <span className="inline-flex items-center rounded-full bg-yellow-100 px-2 py-0.5 text-[10px] font-medium text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400">
+                        {finalResult.coverage_counts.baseline_partial} partial
+                      </span>
+                    )}
+                    {finalResult.coverage_counts.baseline_omitted != null && finalResult.coverage_counts.baseline_omitted > 0 && (
+                      <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-600 dark:bg-gray-800 dark:text-gray-400">
+                        {finalResult.coverage_counts.baseline_omitted} omitted
+                      </span>
+                    )}
+                    {finalResult.coverage_counts.baseline_failed != null && finalResult.coverage_counts.baseline_failed > 0 && (
+                      <span className="inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-medium text-red-700 dark:bg-red-900/30 dark:text-red-400">
+                        {finalResult.coverage_counts.baseline_failed} failed
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Uncovered high-priority files */}
+              {finalResult.uncovered_high_priority_paths && finalResult.uncovered_high_priority_paths.length > 0 && (
+                <details className="border-b px-3 py-2">
+                  <summary className="cursor-pointer text-[11px] font-semibold text-yellow-700 dark:text-yellow-400">
+                    Uncovered high-priority files ({finalResult.uncovered_high_priority_paths.length})
+                  </summary>
+                  <ul className="mt-1.5 space-y-0.5 pl-4 text-[11px] text-muted-foreground">
+                    {finalResult.uncovered_high_priority_paths.map((file, index) => (
+                      <li key={index} className="list-disc break-words">{file}</li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+
+              {/* Run usage details */}
+              {finalResult.run_usage && (
+                <details className="border-b px-3 py-2">
+                  <summary className="cursor-pointer text-[11px] font-semibold">
+                    Resource usage
+                  </summary>
+                  <div className="mt-1.5 space-y-1 text-[11px] text-muted-foreground">
+                    <div className="flex justify-between">
+                      <span>Model calls</span>
+                      <span>{finalResult.run_usage.total_model_calls}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Input tokens</span>
+                      <span>{finalResult.run_usage.total_input_tokens.toLocaleString()}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Output tokens</span>
+                      <span>{finalResult.run_usage.total_output_tokens.toLocaleString()}</span>
+                    </div>
+                    {finalResult.run_usage.total_observation_tokens > 0 && (
+                      <div className="flex justify-between">
+                        <span>Observation tokens</span>
+                        <span>{finalResult.run_usage.total_observation_tokens.toLocaleString()}</span>
+                      </div>
+                    )}
+                    {finalResult.run_usage.total_elapsed_ms > 0 && (
+                      <div className="flex justify-between">
+                        <span>Elapsed time</span>
+                        <span>{(finalResult.run_usage.total_elapsed_ms / 1000).toFixed(1)}s</span>
+                      </div>
+                    )}
+                    {finalResult.run_usage.total_retries > 0 && (
+                      <div className="flex justify-between">
+                        <span>Retries</span>
+                        <span>{finalResult.run_usage.total_retries}</span>
+                      </div>
+                    )}
+                    {finalResult.run_usage.total_fallbacks > 0 && (
+                      <div className="flex justify-between">
+                        <span>Fallbacks</span>
+                        <span>{finalResult.run_usage.total_fallbacks}</span>
+                      </div>
+                    )}
+                  </div>
+                </details>
+              )}
 
               {findings.length > 0 ? (
                 <div className="px-3 py-3">
