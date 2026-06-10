@@ -81,7 +81,8 @@ async def test_run_main_agent_publishes_started_and_completed_events(tmp_dir):
     )
 
     assert "error" not in result
-    assert result["raw_output"] == "done"
+    assert "raw_output" not in result  # raw_output excluded from frontend payload
+    assert result["status"] == "completed"
     assert mgr.get_run("run-1").status.value == "completed"
     assert RUN_STARTED in captured_events
 
@@ -216,7 +217,7 @@ async def test_run_main_agent_passes_max_steps(tmp_dir):
         max_steps=5,
     )
 
-    assert result["raw_output"] == "ok"
+    assert result["status"] == "completed"
 
 
 @pytest.mark.asyncio
@@ -254,7 +255,7 @@ async def test_run_main_agent_publishes_tool_and_subagent_events(tmp_dir):
             run_manager=mgr,
         )
 
-    assert result["raw_output"] == "done"
+    assert result["status"] == "completed"
     event_types = [event.type for event in mgr.get_retained_events("run-1")]
     assert RUN_STARTED in event_types
     assert TOOL_CALL in event_types

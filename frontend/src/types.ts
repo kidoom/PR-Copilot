@@ -10,18 +10,6 @@ export interface PrOverview {
   head_sha: string
 }
 
-export interface GitHubUser {
-  login: string
-  name: string
-  avatar_url: string
-  html_url: string
-}
-
-export interface GitHubAuthSession {
-  authenticated: boolean
-  user: GitHubUser | null
-}
-
 export interface FileEntry {
   filename: string
   status: string

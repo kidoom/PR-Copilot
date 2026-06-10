@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.api.routes import pr_context
 from backend.domain.github.client import GitHubAPIError
+from backend.domain.github.local_credentials import CredentialSource, ResolvedCredential
 
 
 class FakeGitHubClient:
@@ -42,42 +41,34 @@ class FakeGitHubClient:
         pass
 
 
-def test_create_context_prefers_authenticated_session_token(monkeypatch):
-    async def authenticated_session(request):
-        return SimpleNamespace(session_id="session-1", access_token="ghu_session")
-
+def test_create_context_uses_local_credential(monkeypatch):
     FakeGitHubClient.tokens = []
-    monkeypatch.setattr(pr_context, "get_authenticated_github_session", authenticated_session)
+    monkeypatch.setattr(
+        pr_context, "resolve_github_token",
+        lambda: ResolvedCredential(token="ghp_local", source=CredentialSource.GH_TOKEN),
+    )
     monkeypatch.setattr(pr_context, "GitHubClient", FakeGitHubClient)
     app = FastAPI()
     app.include_router(pr_context.router)
 
     response = TestClient(app).post(
         "/api/pr/context",
-        json={
-            "pr_url": "https://github.com/owner/repo/pull/1",
-            "github_token": "legacy-token",
-        },
+        json={"pr_url": "https://github.com/owner/repo/pull/1"},
     )
 
     assert response.status_code == 200
-    assert FakeGitHubClient.tokens == ["ghu_session"]
+    assert FakeGitHubClient.tokens == ["ghp_local"]
 
 
-def test_create_context_prompts_to_connect_private_repository(monkeypatch):
+def test_create_context_returns_auth_guidance_for_private_repo(monkeypatch):
     class InaccessibleGitHubClient(FakeGitHubClient):
         async def get_pr(self, owner, repo, pull_number):
             raise GitHubAPIError(404, "PR not found or repository is private", "not_found")
 
-    class AuthService:
-        async def repository_access(self, session_id, *, owner, repo):
-            return {"authorized": False, "installation_id": None}
-
-    async def authenticated_session(request):
-        return SimpleNamespace(session_id="session-1", access_token="ghu_session")
-
-    monkeypatch.setattr(pr_context, "get_authenticated_github_session", authenticated_session)
-    monkeypatch.setattr(pr_context, "get_github_auth_service", lambda: AuthService())
+    monkeypatch.setattr(
+        pr_context, "resolve_github_token",
+        lambda: ResolvedCredential(token="", source=CredentialSource.ANONYMOUS),
+    )
     monkeypatch.setattr(pr_context, "GitHubClient", InaccessibleGitHubClient)
     app = FastAPI()
     app.include_router(pr_context.router)
@@ -87,9 +78,5 @@ def test_create_context_prompts_to_connect_private_repository(monkeypatch):
         json={"pr_url": "https://github.com/owner/private-repo/pull/1"},
     )
 
-    assert response.status_code == 403
-    assert response.json()["detail"] == {
-        "code": "github_app_repository_access_required",
-        "message": "Connect this repository to the GitHub App, then try the PR analysis again.",
-        "install_url": "/api/auth/github/install",
-    }
+    assert response.status_code == 404
+    assert "PR not found" in response.json()["detail"]

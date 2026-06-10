@@ -189,11 +189,10 @@ async def test_create_run_does_not_block(monkeypatch):
         set_agent_deps(None)
 
 
-def test_create_run_passes_authenticated_token_to_background_task(monkeypatch):
-    captured: dict[str, Any] = {}
+def test_create_run_passes_local_credential_to_background_task(monkeypatch):
+    from backend.domain.github.local_credentials import CredentialSource, ResolvedCredential
 
-    async def authenticated_token(request):
-        return "ghu_session"
+    captured: dict[str, Any] = {}
 
     async def fake_execute_run(run_id, context_id, task_plan, local_repo_root, token):
         captured["token"] = token
@@ -201,8 +200,8 @@ def test_create_run_passes_authenticated_token_to_background_task(monkeypatch):
     _seed_context("ctx-test-auth")
     try:
         monkeypatch.setattr(
-            "backend.api.routes.review_runs.get_authenticated_github_token",
-            authenticated_token,
+            "backend.api.routes.review_runs.resolve_github_token",
+            lambda: ResolvedCredential(token="ghp_local", source=CredentialSource.GH_TOKEN),
         )
         monkeypatch.setattr(
             "backend.api.routes.review_runs._execute_run",
@@ -216,6 +215,6 @@ def test_create_run_passes_authenticated_token_to_background_task(monkeypatch):
         )
 
         assert response.status_code == 200
-        assert captured["token"] == "ghu_session"
+        assert captured["token"] == "ghp_local"
     finally:
         _unseed_context("ctx-test-auth")

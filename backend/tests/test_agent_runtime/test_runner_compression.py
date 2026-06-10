@@ -65,7 +65,7 @@ class TestMainRunnerCompression:
         )
 
         assert "error" not in result
-        assert result["raw_output"] == "done"
+        assert result["status"] == "completed"
 
     @pytest.mark.asyncio
     async def test_main_runner_creates_main_session(self, store, config):

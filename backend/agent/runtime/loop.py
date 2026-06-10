@@ -9,6 +9,7 @@ from backend.agent.runtime.trace import ThinkStep, CallStep, ObserveStep, FinalS
 from backend.agent.runtime.results import AgentResult, ToolExecutionResult
 from backend.agent.tools.protocol import Tool, ToolConsentFn
 from backend.agent.tools.registry import ToolRegistry
+from backend.agent.tools.executor import ToolExecutor, ToolExecutorConfig, ToolObservation
 from backend.agent.model.client import ModelClient
 
 logger = logging.getLogger(__name__)
@@ -99,6 +100,8 @@ async def run_loop(
     compression_config=None,  # CompressionConfig | None
     compression_profile=None,  # CompactProfile | None
     on_compact: CompactCallback | None = None,
+    # ToolExecutor for validated tool execution
+    tool_executor: ToolExecutor | None = None,
 ) -> AgentResult:
     steps: list[AgentStep] = []
     total_usage = TokenUsage()
@@ -266,56 +269,44 @@ async def run_loop(
                 tool_input=block.input,
                 tool_use_id=block.tool_use_id,
             ))
-            if on_tool_call:
-                on_tool_call({
-                    "agent_kind": agent_kind,
-                    "agent_type": agent_type,
-                    "task_id": task_id,
-                    "child_session_id": child_session_id,
-                    "tool_name": block.name,
-                    "tool_use_id": block.tool_use_id,
-                    "input": block.input,
-                })
 
-            tool = tool_registry.resolve(block.name)
-            if tool is None:
-                error_output = f"Unknown tool: {block.name}"
+            # Use ToolExecutor if available, otherwise fall back to direct invocation
+            if tool_executor is not None:
+                obs = await tool_executor.execute(block)
+                result = obs.content
+                is_error = obs.is_error
+
                 steps.append(ObserveStep(
                     tool_use_id=block.tool_use_id,
-                    output=error_output,
-                    is_error=True,
+                    output=result,
+                    is_error=is_error,
                 ))
-                if on_tool_result:
-                    on_tool_result({
+                tool_msg = Message(
+                    role=Role.TOOL,
+                    content=[obs.to_result_block()],
+                )
+                messages.append(tool_msg)
+                if on_message:
+                    on_message(tool_msg)
+            else:
+                # Legacy direct invocation path
+                if on_tool_call:
+                    on_tool_call({
                         "agent_kind": agent_kind,
                         "agent_type": agent_type,
                         "task_id": task_id,
                         "child_session_id": child_session_id,
                         "tool_name": block.name,
                         "tool_use_id": block.tool_use_id,
-                        "output": error_output,
-                        "is_error": True,
+                        "input": block.input,
                     })
-                tool_msg = Message(
-                    role=Role.TOOL,
-                    content=[ToolResultBlock(
-                        tool_use_id=block.tool_use_id,
-                        content=error_output,
-                        is_error=True,
-                    )],
-                )
-                messages.append(tool_msg)
-                if on_message:
-                    on_message(tool_msg)
-                continue
 
-            if tool.requires_consent and tool_consent is not None:
-                approved = await tool_consent(tool, block.input)
-                if not approved:
-                    consent_output = f"Tool '{block.name}' requires user consent and was denied."
+                tool = tool_registry.resolve(block.name)
+                if tool is None:
+                    error_output = f"Unknown tool: {block.name}"
                     steps.append(ObserveStep(
                         tool_use_id=block.tool_use_id,
-                        output=consent_output,
+                        output=error_output,
                         is_error=True,
                     ))
                     if on_tool_result:
@@ -326,56 +317,89 @@ async def run_loop(
                             "child_session_id": child_session_id,
                             "tool_name": block.name,
                             "tool_use_id": block.tool_use_id,
-                            "output": consent_output,
+                            "output": error_output,
                             "is_error": True,
                         })
-                    consent_msg = Message(
+                    tool_msg = Message(
                         role=Role.TOOL,
                         content=[ToolResultBlock(
                             tool_use_id=block.tool_use_id,
-                            content=consent_output,
+                            content=error_output,
                             is_error=True,
                         )],
                     )
-                    messages.append(consent_msg)
+                    messages.append(tool_msg)
                     if on_message:
-                        on_message(consent_msg)
+                        on_message(tool_msg)
                     continue
 
-            try:
-                result = await tool.call(block.input)
-                is_error = False
-            except Exception as exc:
-                result = str(exc)
-                is_error = True
+                if tool.requires_consent and tool_consent is not None:
+                    approved = await tool_consent(tool, block.input)
+                    if not approved:
+                        consent_output = f"Tool '{block.name}' requires user consent and was denied."
+                        steps.append(ObserveStep(
+                            tool_use_id=block.tool_use_id,
+                            output=consent_output,
+                            is_error=True,
+                        ))
+                        if on_tool_result:
+                            on_tool_result({
+                                "agent_kind": agent_kind,
+                                "agent_type": agent_type,
+                                "task_id": task_id,
+                                "child_session_id": child_session_id,
+                                "tool_name": block.name,
+                                "tool_use_id": block.tool_use_id,
+                                "output": consent_output,
+                                "is_error": True,
+                            })
+                        consent_msg = Message(
+                            role=Role.TOOL,
+                            content=[ToolResultBlock(
+                                tool_use_id=block.tool_use_id,
+                                content=consent_output,
+                                is_error=True,
+                            )],
+                        )
+                        messages.append(consent_msg)
+                        if on_message:
+                            on_message(consent_msg)
+                        continue
 
-            steps.append(ObserveStep(
-                tool_use_id=block.tool_use_id,
-                output=result,
-                is_error=is_error,
-            ))
-            if on_tool_result:
-                on_tool_result({
-                    "agent_kind": agent_kind,
-                    "agent_type": agent_type,
-                    "task_id": task_id,
-                    "child_session_id": child_session_id,
-                    "tool_name": block.name,
-                    "tool_use_id": block.tool_use_id,
-                    "output": result,
-                    "is_error": is_error,
-                })
-            tool_msg = Message(
-                role=Role.TOOL,
-                content=[ToolResultBlock(
+                try:
+                    result = await tool.call(block.input)
+                    is_error = False
+                except Exception as exc:
+                    result = str(exc)
+                    is_error = True
+
+                steps.append(ObserveStep(
                     tool_use_id=block.tool_use_id,
-                    content=result,
+                    output=result,
                     is_error=is_error,
-                )],
-            )
-            messages.append(tool_msg)
-            if on_message:
-                on_message(tool_msg)
+                ))
+                if on_tool_result:
+                    on_tool_result({
+                        "agent_kind": agent_kind,
+                        "agent_type": agent_type,
+                        "task_id": task_id,
+                        "child_session_id": child_session_id,
+                        "tool_name": block.name,
+                        "tool_use_id": block.tool_use_id,
+                        "output": result,
+                        "is_error": is_error,
+                    })
+                tool_msg = Message(
+                    role=Role.TOOL,
+                    content=[ToolResultBlock(
+                        tool_use_id=block.tool_use_id,
+                        content=result,
+                        is_error=is_error,
+                    )],
+                )
+                messages.append(tool_msg)
+                if on_message:
+                    on_message(tool_msg)
 
             # Check cancellation after each tool call (task 4.2)
             check_cancellation(cancellation_probe)

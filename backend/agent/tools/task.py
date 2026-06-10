@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from typing import Any, Callable, Awaitable
 
+from backend.agent.runtime.accounting import OperationUsage, RunUsage, RuntimeFailureReason
 from backend.agent.runtime.agent_def import AgentRegistry
 from backend.agent.runtime.cancellation import CancellationProbe, Cancelled
 from backend.agent.runtime.review_result import ReviewResult, parse_review_result, validate_review_result
 from backend.agent.runtime.sub_agent import SubAgentResult
 from backend.agent.tools.protocol import RiskLevel
+
+logger = logging.getLogger(__name__)
 
 Runner = Callable[..., Awaitable[SubAgentResult]]
 
@@ -28,6 +32,8 @@ class TaskTool:
         agent_types: list[str] | None = None,
         max_concurrent_tasks: int = 6,
         cancellation_probe: CancellationProbe | None = None,
+        run_usage: RunUsage | None = None,
+        run_budget_remaining: int | None = None,
     ) -> None:
         self._runner = runner
         self._agent_types = agent_types or (agent_registry.names() if agent_registry is not None else ["default"])
@@ -36,6 +42,8 @@ class TaskTool:
         self._max_concurrent_tasks = max(1, int(max_concurrent_tasks))
         self._cancellation_probe = cancellation_probe
         self._last_batch_results: list[dict[str, Any]] | None = None
+        self._run_usage = run_usage
+        self._run_budget_remaining = run_budget_remaining
 
     @property
     def name(self) -> str:
@@ -191,6 +199,14 @@ class TaskTool:
                         max_steps=task_max_steps,
                     )
                 except Exception as exc:
+                    failure_reason = RuntimeFailureReason.UNKNOWN.value
+                    if "timeout" in str(exc).lower():
+                        failure_reason = RuntimeFailureReason.TIMEOUT.value
+                    elif "budget" in str(exc).lower():
+                        failure_reason = RuntimeFailureReason.BUDGET_EXHAUSTED.value
+                    elif isinstance(exc, Cancelled):
+                        failure_reason = RuntimeFailureReason.CANCELLED.value
+
                     results[index] = {
                         "index": index,
                         "task_id": task_payload.get("task_id", ""),
@@ -198,6 +214,7 @@ class TaskTool:
                         "agent_type": effective_agent_type,
                         "status": "error",
                         "error": str(exc),
+                        "failure_reason": failure_reason,
                     }
                     return
 
@@ -205,6 +222,25 @@ class TaskTool:
                 parsed = parse_review_result(result.output)
                 validation_errors = validate_review_result(parsed) if parsed else ["Failed to parse JSON"]
                 is_valid = parsed is not None and len(validation_errors) == 0
+
+                # Propagate SubAgent usage (task 4.3)
+                subagent_usage = {
+                    "input_tokens": result.token_usage.input_tokens if result.token_usage else 0,
+                    "output_tokens": result.token_usage.output_tokens if result.token_usage else 0,
+                    "model_calls": len(result.steps) if result.steps else 0,
+                }
+
+                # Aggregate into run usage if available
+                if self._run_usage:
+                    op = OperationUsage(
+                        operation_type=task_payload.get("task_type", "unknown"),
+                        agent_type=result.agent_type,
+                        task_id=task_payload.get("task_id", ""),
+                        model_calls=subagent_usage["model_calls"],
+                        input_tokens=subagent_usage["input_tokens"],
+                        output_tokens=subagent_usage["output_tokens"],
+                    )
+                    self._run_usage.add_operation(op)
 
                 results[index] = {
                     "index": index,
@@ -220,6 +256,7 @@ class TaskTool:
                     "parsed_result": parsed.to_dict() if parsed else None,
                     "parse_status": "valid" if is_valid else "invalid",
                     "validation_errors": validation_errors if not is_valid else [],
+                    "subagent_usage": subagent_usage,
                 }
 
         pending: list[Awaitable[None]] = []

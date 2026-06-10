@@ -38,9 +38,13 @@ def test_final_review_result_to_dict():
     assert d["uncertainties"] == ["unc1"]
     assert d["notes"] == ["note1"]
     assert len(d["task_summaries"]) == 1
-    assert d["raw_output"] == "raw text"
+    assert "raw_output" not in d  # excluded from frontend payload
     assert d["steps"] == 3
     assert d["token_usage"]["input_tokens"] == 100
+
+    # to_debug_dict includes raw_output
+    dd = result.to_debug_dict()
+    assert dd["raw_output"] == "raw text"
 
 
 # --- Task 5.2: Define task summary model ---
@@ -256,7 +260,7 @@ def test_build_final_result_shape():
     assert "uncertainties" in d
     assert "notes" in d
     assert "task_summaries" in d
-    assert "raw_output" in d
+    assert "raw_output" not in d  # excluded from frontend payload
     assert "steps" in d
     assert "stopped_by_max_steps" in d
     assert "token_usage" in d

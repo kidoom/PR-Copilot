@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-import asyncio
-import json
-
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from backend.agent.runtime.events import RUN_STARTED, RUN_COMPLETED, RUN_CANCELLED
-from backend.agent.runtime.run_manager import RunManager
+from backend.agent.runtime.events import RUN_STARTED, RUN_COMPLETED
 from backend.api.routes.review_ws import router
 
 
@@ -16,33 +12,6 @@ def _make_test_app() -> FastAPI:
     app = FastAPI()
     app.include_router(router)
     return app
-
-
-@pytest.fixture(autouse=True)
-def authenticated_websocket(monkeypatch):
-    async def authenticated_session(websocket):
-        return object()
-
-    monkeypatch.setattr(
-        "backend.api.routes.review_ws.get_authenticated_github_session",
-        authenticated_session,
-    )
-
-
-def test_websocket_rejects_anonymous_user(monkeypatch):
-    async def anonymous_session(websocket):
-        return None
-
-    monkeypatch.setattr(
-        "backend.api.routes.review_ws.get_authenticated_github_session",
-        anonymous_session,
-    )
-    app = _make_test_app()
-    client = TestClient(app)
-
-    with pytest.raises(Exception):
-        with client.websocket_connect("/ws/review-runs/any-run"):
-            pass
 
 
 def test_websocket_rejects_unknown_run():

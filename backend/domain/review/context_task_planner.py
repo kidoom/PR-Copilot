@@ -1,21 +1,31 @@
 import hashlib
 from dataclasses import dataclass, field
+from typing import Any
 
+from backend.agent.runtime.accounting import (
+    CoverageEntry,
+    CoverageLane,
+    CoverageManifest,
+    CoverageState,
+)
 from backend.domain.pr_context.context_manager import PRContext, FileEntry
 from backend.domain.review.evidence import EvidenceItem
+from backend.domain.review.route_registry import (
+    ROUTE_REGISTRY,
+    DEFAULT_LANES,
+    RouteDefinition,
+    get_route,
+    get_all_routes,
+    get_allowed_tools,
+    get_agent_type,
+    get_disallowed_tools,
+    route_to_dict,
+)
 
 
 # --- 1.2 Constants ---
 
-TASK_TYPES = [
-    "test_context",
-    "reference_context",
-    "security_context",
-    "config_context",
-    "data_context",
-    "runtime_context",
-    "patch_deep_dive",
-]
+TASK_TYPES = list(ROUTE_REGISTRY.keys())
 
 TASK_TYPE_SET = set(TASK_TYPES)
 
@@ -28,84 +38,10 @@ PRIORITY_RANK = {
     "low": 3,
 }
 
-DEFAULT_BUDGETS = {
-    "test_context": {"max_searches": 5, "max_files": 10, "max_tokens": 3000},
-    "reference_context": {"max_searches": 5, "max_files": 10, "max_tokens": 3000},
-    "security_context": {"max_searches": 4, "max_files": 8, "max_tokens": 2500},
-    "config_context": {"max_searches": 3, "max_files": 6, "max_tokens": 2000},
-    "data_context": {"max_searches": 4, "max_files": 8, "max_tokens": 2500},
-    "runtime_context": {"max_searches": 4, "max_files": 8, "max_tokens": 2500},
-    "patch_deep_dive": {"max_searches": 3, "max_files": 5, "max_tokens": 2000},
-}
-
-ROUTE_KEYS = {
-    "test_context": "route:test_context",
-    "reference_context": "route:reference_context",
-    "security_context": "route:security_context",
-    "config_context": "route:config_context",
-    "data_context": "route:data_context",
-    "runtime_context": "route:runtime_context",
-    "patch_deep_dive": "route:patch_deep_dive",
-}
-
-OUTPUT_SCHEMAS = {
-    "test_context": {
-        "type": "object",
-        "properties": {
-            "related_tests": {"type": "array", "items": {"type": "string"}},
-            "test_gaps": {"type": "array", "items": {"type": "string"}},
-            "summary": {"type": "string"},
-        },
-    },
-    "reference_context": {
-        "type": "object",
-        "properties": {
-            "references": {"type": "array", "items": {"type": "string"}},
-            "callers": {"type": "array", "items": {"type": "string"}},
-            "summary": {"type": "string"},
-        },
-    },
-    "security_context": {
-        "type": "object",
-        "properties": {
-            "findings": {"type": "array", "items": {"type": "string"}},
-            "risk_level": {"type": "string"},
-            "summary": {"type": "string"},
-        },
-    },
-    "config_context": {
-        "type": "object",
-        "properties": {
-            "config_files": {"type": "array", "items": {"type": "string"}},
-            "ci_status": {"type": "string"},
-            "summary": {"type": "string"},
-        },
-    },
-    "data_context": {
-        "type": "object",
-        "properties": {
-            "models": {"type": "array", "items": {"type": "string"}},
-            "migrations": {"type": "array", "items": {"type": "string"}},
-            "summary": {"type": "string"},
-        },
-    },
-    "runtime_context": {
-        "type": "object",
-        "properties": {
-            "risks": {"type": "array", "items": {"type": "string"}},
-            "patterns": {"type": "array", "items": {"type": "string"}},
-            "summary": {"type": "string"},
-        },
-    },
-    "patch_deep_dive": {
-        "type": "object",
-        "properties": {
-            "complexity_notes": {"type": "array", "items": {"type": "string"}},
-            "suggestions": {"type": "array", "items": {"type": "string"}},
-            "summary": {"type": "string"},
-        },
-    },
-}
+# Derived from shared registry
+DEFAULT_BUDGETS = {tt: r.budget for tt, r in ROUTE_REGISTRY.items()}
+ROUTE_KEYS = {tt: r.route_key for tt, r in ROUTE_REGISTRY.items()}
+OUTPUT_SCHEMAS = {tt: r.output_schema for tt, r in ROUTE_REGISTRY.items()}
 
 INTENTS = [
     "find_related_tests",
@@ -121,6 +57,39 @@ INTENTS = [
 
 # Per-type task cap to avoid oversized plans for large PRs
 DEFAULT_TASK_CAP = 10
+
+# Global task budget
+MAX_TASKS_PER_RUN = 6
+
+# Default baseline capacity (number of slots reserved for patch_deep_dive)
+DEFAULT_BASELINE_CAPACITY = 3
+
+# Per-batch token budget for baseline patch review (estimated tokens)
+DEFAULT_PATCH_BATCH_TOKEN_BUDGET = 8000
+
+# Feature flag: enable hybrid baseline planning
+# When False, falls back to legacy behavior (specialist-only coverage)
+HYBRID_BASELINE_ENABLED = True
+
+
+def _is_hybrid_enabled() -> bool:
+    """Check if hybrid baseline planning is enabled.
+
+    Can be controlled via environment variable PR_COPILOT_HYBRID_BASELINE_ENABLED.
+    """
+    import os
+    env_val = os.environ.get("PR_COPILOT_HYBRID_BASELINE_ENABLED", "")
+    if env_val.lower() in ("false", "0", "no"):
+        return False
+    if env_val.lower() in ("true", "1", "yes"):
+        return True
+    return HYBRID_BASELINE_ENABLED
+
+# Tokens per line heuristic for estimation
+_TOKENS_PER_LINE = 4
+
+# Maximum individual patch tokens before marking as partial
+_MAX_SINGLE_PATCH_TOKENS = 12000
 
 
 # --- 1.1 Data structures ---
@@ -205,30 +174,19 @@ def task_identity(task: ContextTask) -> str:
     return f"{task.task_type}:{task.intent}:{source_key}:{target_key}:{query_key}"
 
 
-# --- 2. Route and Agent Metadata ---
+# --- 2. Route and Agent Metadata (from shared registry) ---
 
-_SUBAGENT_DISALLOWED_TOOLS = ["task_tool", "sub_agent"]
-
-_BASE_TOOLS = ["todo_write", "verify_repo_context"]
-
-_PER_TASK_ALLOWED_TOOLS: dict[str, list[str]] = {
-    "test_context": _BASE_TOOLS + ["read_file_patch", "search_diff", "search_tests_for", "read_repo_file"],
-    "reference_context": _BASE_TOOLS + ["read_file_patch", "search_diff", "search_repo", "read_repo_file"],
-    "security_context": _BASE_TOOLS + ["read_file_patch", "search_diff", "search_repo", "read_repo_file", "read_repo_manifest"],
-    "config_context": _BASE_TOOLS + ["search_diff", "search_repo", "read_repo_file", "read_repo_manifest", "read_check_summary"],
-    "data_context": _BASE_TOOLS + ["read_file_patch", "search_diff", "search_repo", "read_repo_file"],
-    "runtime_context": _BASE_TOOLS + ["read_file_patch", "search_diff", "search_repo", "read_repo_file"],
-    "patch_deep_dive": _BASE_TOOLS + ["read_file_patch", "search_diff", "read_repo_file"],
-}
+_SUBAGENT_DISALLOWED_TOOLS = get_disallowed_tools()
+_PER_TASK_ALLOWED_TOOLS = {tt: list(get_allowed_tools(tt)) for tt in TASK_TYPES}
 
 
-# --- 2.1 Static Task Route registry ---
+# --- 2.1 Static Task Route registry (from shared registry) ---
 
 TASK_ROUTES: dict[str, TaskRoute] = {
     tt: TaskRoute(
         task_type=tt,
         route_key=ROUTE_KEYS[tt],
-        agent_type=tt.replace("_", "-") + "-agent",
+        agent_type=get_agent_type(tt),
         allowed_tools=list(_PER_TASK_ALLOWED_TOOLS[tt]),
         output_schema=OUTPUT_SCHEMAS[tt],
         max_steps=5,
@@ -237,51 +195,16 @@ TASK_ROUTES: dict[str, TaskRoute] = {
 }
 
 
-# --- 2.2 Static Agent Definition registry ---
+# --- 2.2 Static Agent Definition registry (from shared registry) ---
 
 AGENT_DEFINITIONS: dict[str, PlannerAgentDefinition] = {
-    "test-context-agent": PlannerAgentDefinition(
-        agent_type="test-context-agent",
-        description="Finds related tests, test gaps, and test coverage signals for changed source files",
-        allowed_tools=list(_PER_TASK_ALLOWED_TOOLS["test_context"]),
+    get_agent_type(tt): PlannerAgentDefinition(
+        agent_type=get_agent_type(tt),
+        description=ROUTE_REGISTRY[tt].description,
+        allowed_tools=list(_PER_TASK_ALLOWED_TOOLS[tt]),
         disallowed_tools=list(_SUBAGENT_DISALLOWED_TOOLS),
-    ),
-    "reference-context-agent": PlannerAgentDefinition(
-        agent_type="reference-context-agent",
-        description="Finds references, callers, API usage, and symbol impact for changed files",
-        allowed_tools=list(_PER_TASK_ALLOWED_TOOLS["reference_context"]),
-        disallowed_tools=list(_SUBAGENT_DISALLOWED_TOOLS),
-    ),
-    "security-context-agent": PlannerAgentDefinition(
-        agent_type="security-context-agent",
-        description="Inspects authentication, authorization, secrets, SQL risk, and input validation context",
-        allowed_tools=list(_PER_TASK_ALLOWED_TOOLS["security_context"]),
-        disallowed_tools=list(_SUBAGENT_DISALLOWED_TOOLS),
-    ),
-    "config-context-agent": PlannerAgentDefinition(
-        agent_type="config-context-agent",
-        description="Inspects configuration, environment variables, dependency files, CI/checks, and deployment context",
-        allowed_tools=list(_PER_TASK_ALLOWED_TOOLS["config_context"]),
-        disallowed_tools=list(_SUBAGENT_DISALLOWED_TOOLS),
-    ),
-    "data-context-agent": PlannerAgentDefinition(
-        agent_type="data-context-agent",
-        description="Inspects database, schema, migration, cache, model, and data access context",
-        allowed_tools=list(_PER_TASK_ALLOWED_TOOLS["data_context"]),
-        disallowed_tools=list(_SUBAGENT_DISALLOWED_TOOLS),
-    ),
-    "runtime-context-agent": PlannerAgentDefinition(
-        agent_type="runtime-context-agent",
-        description="Inspects exception handling, async behavior, concurrency, timeouts, retries, and resource lifecycle",
-        allowed_tools=list(_PER_TASK_ALLOWED_TOOLS["runtime_context"]),
-        disallowed_tools=list(_SUBAGENT_DISALLOWED_TOOLS),
-    ),
-    "patch-deep-dive-agent": PlannerAgentDefinition(
-        agent_type="patch-deep-dive-agent",
-        description="Performs deep local inspection of high-priority or complex patches",
-        allowed_tools=list(_PER_TASK_ALLOWED_TOOLS["patch_deep_dive"]),
-        disallowed_tools=list(_SUBAGENT_DISALLOWED_TOOLS),
-    ),
+    )
+    for tt in TASK_TYPES
 }
 
 
@@ -361,40 +284,68 @@ def _generate_test_context_tasks(ctx: PRContext, evidence: list[EvidenceItem]) -
     tasks: list[ContextTask] = []
     idx = 0
 
-    # Source files without tests
-    if ctx.derived and ctx.derived.has_source_without_tests:
-        source_files = [f.filename for f in ctx.files if f.is_source and not f.is_test]
-        if source_files:
+    # Collect source files that need test coverage analysis
+    source_without_tests = []
+    files_with_no_test_pair = []
+
+    for f in ctx.files:
+        if not f.is_source or f.is_test:
+            continue
+        source_without_tests.append(f)
+        if "no_test_pair" in f.risk_hints:
+            files_with_no_test_pair.append(f)
+
+    # Batch source-without-tests files
+    if ctx.derived and ctx.derived.has_source_without_tests and source_without_tests:
+        batches = _batch_files_by_directory(source_without_tests)
+        for batch in batches:
+            batch_files = [f.filename for f in batch]
+            batch_keywords = ["test", "spec"]
+            for f in batch:
+                batch_keywords.extend(_file_keywords(f))
+            batch_keywords = list(set(batch_keywords))
+
             ev_ids = [e.id for e in evidence if e.rule_id == "source_without_tests"]
             tasks.append(_make_task(
                 task_type="test_context",
                 intent="find_related_tests",
                 source=TaskSource(evidence_ids=ev_ids, rule_ids=["source_without_tests"], signals=["source_without_tests"]),
-                target=TaskTarget(files=source_files[:5], keywords=["test", "spec"]),
-                queries=[f"find tests for {f}" for f in source_files[:3]],
+                target=TaskTarget(files=batch_files, keywords=batch_keywords),
+                queries=[f"find tests for {f.filename}" for f in batch],
                 priority="high",
                 expected_output="List of related test files and test coverage gaps",
                 fallback="Mark as inconclusive if no test files are found",
                 index=idx,
-                target_file=source_files[0],
+                target_file=batch_files[0],
             ))
             idx += 1
 
-    # Per-source-file test lookup for files with no_test_pair hint
-    for f in ctx.files:
-        if f.is_source and not f.is_test and "no_test_pair" in f.risk_hints:
-            kw = _file_keywords(f)
+    # Batch no_test_pair files that weren't already covered
+    covered_files = set()
+    for t in tasks:
+        covered_files.update(t.target.files)
+
+    uncovered_no_test = [f for f in files_with_no_test_pair if f.filename not in covered_files]
+    if uncovered_no_test:
+        batches = _batch_files_by_directory(uncovered_no_test)
+        for batch in batches:
+            batch_files = [f.filename for f in batch]
+            batch_keywords = []
+            for f in batch:
+                batch_keywords.extend(_file_keywords(f))
+            batch_keywords = list(set(batch_keywords))
+
             tasks.append(_make_task(
                 task_type="test_context",
                 intent="find_related_tests",
-                source=TaskSource(signals=["no_test_pair"], file_facts=[f.filename]),
-                target=TaskTarget(files=[f.filename], keywords=kw),
-                queries=[f"find tests related to {f.filename}"],
+                source=TaskSource(signals=["no_test_pair"], file_facts=batch_files),
+                target=TaskTarget(files=batch_files, keywords=batch_keywords),
+                queries=[f"find tests related to {f.filename}" for f in batch],
                 priority="medium",
                 expected_output="Related test files or confirmation that no tests exist",
                 fallback="Mark as no-test-found",
                 index=idx,
-                target_file=f.filename,
+                target_file=batch_files[0],
             ))
             idx += 1
 
@@ -403,30 +354,61 @@ def _generate_test_context_tasks(ctx: PRContext, evidence: list[EvidenceItem]) -
 
 # --- 3.3 reference_context tasks ---
 
+MAX_BATCH_SIZE = 5
+
+
+def _batch_files_by_directory(files: list[FileEntry], max_batch: int = MAX_BATCH_SIZE) -> list[list[FileEntry]]:
+    """Group source files by directory, with batches of up to max_batch files."""
+    by_dir: dict[str, list[FileEntry]] = {}
+    for f in files:
+        dir_name = f.filename.replace("\\", "/").rsplit("/", 1)[0] if "/" in f.filename else ""
+        by_dir.setdefault(dir_name, []).append(f)
+
+    batches: list[list[FileEntry]] = []
+    for dir_files in by_dir.values():
+        for i in range(0, len(dir_files), max_batch):
+            batches.append(dir_files[i:i + max_batch])
+    return batches
+
+
 def _generate_reference_context_tasks(ctx: PRContext, evidence: list[EvidenceItem]) -> list[ContextTask]:
     tasks: list[ContextTask] = []
-    idx = 0
+    source_files = [f for f in ctx.files if f.is_source and not f.is_test]
 
-    for f in ctx.files:
-        if not f.is_source or f.is_test:
-            continue
-        kw = _file_keywords(f)
-        symbol = _symbol_from_filename(f)
-        queries = [f"find references to {symbol}", f"find callers of {f.filename}"]
-        priority = "high" if f.priority_score_hint >= 70 else "medium"
+    if not source_files:
+        return tasks
+
+    batches = _batch_files_by_directory(source_files)
+
+    for idx, batch in enumerate(batches):
+        batch_files = [f.filename for f in batch]
+        batch_symbols = [_symbol_from_filename(f) for f in batch]
+        batch_keywords = []
+        for f in batch:
+            batch_keywords.extend(_file_keywords(f))
+        batch_keywords = list(set(batch_keywords))
+
+        queries = []
+        for f in batch:
+            symbol = _symbol_from_filename(f)
+            queries.append(f"find references to {symbol}")
+            queries.append(f"find callers of {f.filename}")
+
+        max_priority = max(f.priority_score_hint for f in batch)
+        priority = "high" if max_priority >= 70 else "medium"
+
         tasks.append(_make_task(
             task_type="reference_context",
             intent="find_references",
-            source=TaskSource(file_facts=[f.filename], signals=["source_file_changed"]),
-            target=TaskTarget(files=[f.filename], symbols=[symbol], keywords=kw),
+            source=TaskSource(file_facts=batch_files, signals=["source_file_changed"]),
+            target=TaskTarget(files=batch_files, symbols=batch_symbols, keywords=batch_keywords),
             queries=queries,
             priority=priority,
             expected_output="List of references, callers, and API usage sites",
             fallback="Mark as no-references-found if nothing is found",
             index=idx,
-            target_file=f.filename,
+            target_file=batch_files[0],
         ))
-        idx += 1
 
     return tasks
 
@@ -697,36 +679,127 @@ def _generate_runtime_context_tasks(ctx: PRContext, evidence: list[EvidenceItem]
     return tasks
 
 
-# --- 3.8 patch_deep_dive tasks ---
+# --- 3.8 Patch token estimation and batching ---
+
+
+def estimate_patch_tokens(f: FileEntry) -> int:
+    """Estimate token count for a file's patch content."""
+    if f.large_patch or not f.patch_available:
+        return _MAX_SINGLE_PATCH_TOKENS
+    return max(1, (f.added_line_count + f.removed_line_count) * _TOKENS_PER_LINE)
+
+
+def batch_patches_by_budget(
+    files: list[FileEntry],
+    token_budget: int = DEFAULT_PATCH_BATCH_TOKEN_BUDGET,
+) -> list[list[FileEntry]]:
+    """Group files into deterministic batches that fit within token budgets.
+
+    Files are sorted by priority (descending) then filename for determinism.
+    Each batch stays within the token budget. Individually oversized files
+    get their own batch with a partial marker.
+    """
+    # Sort by priority descending, then filename for determinism
+    sorted_files = sorted(files, key=lambda f: (-f.priority_score_hint, f.filename))
+
+    batches: list[list[FileEntry]] = []
+    current_batch: list[FileEntry] = []
+    current_tokens = 0
+
+    for f in sorted_files:
+        est = estimate_patch_tokens(f)
+
+        # Individually oversized files get their own batch
+        if est > token_budget:
+            # Flush current batch first
+            if current_batch:
+                batches.append(current_batch)
+                current_batch = []
+                current_tokens = 0
+            batches.append([f])  # Solo batch, will be marked partial
+            continue
+
+        # Would this file exceed the current batch?
+        if current_tokens + est > token_budget and current_batch:
+            batches.append(current_batch)
+            current_batch = []
+            current_tokens = 0
+
+        current_batch.append(f)
+        current_tokens += est
+
+    if current_batch:
+        batches.append(current_batch)
+
+    return batches
+
 
 def _generate_patch_deep_dive_tasks(
     ctx: PRContext,
     covered_files: set[str],
 ) -> list[ContextTask]:
-    tasks: list[ContextTask] = []
-    idx = 0
+    """Generate baseline patch_deep_dive tasks for high-priority source files.
 
-    # High-priority source files not already covered by more specific tasks
+    High-priority files remain eligible for baseline review even when specialist
+    tasks also target the same file. Only non-high-priority files are excluded
+    if they already have specialist coverage.
+
+    Files are batched deterministically by priority and estimated patch tokens.
+    Individually oversized patches get their own batch with partial markers.
+    """
+    # Collect eligible files
+    eligible: list[FileEntry] = []
     for f in ctx.files:
-        if f.filename in covered_files:
-            continue
         if not f.is_source or f.is_test or f.is_docs:
             continue
-        if f.priority_score_hint < 70:
+
+        is_high_priority = f.priority_score_hint >= 70
+
+        # High-priority files always get baseline eligibility
+        if is_high_priority:
+            eligible.append(f)
+        elif f.filename in covered_files:
+            # Non-high-priority files skip if already covered by specialist tasks
             continue
+        else:
+            continue  # Skip low-priority files not covered by anything
+
+    if not eligible:
+        return []
+
+    # Batch by token budget
+    batches = batch_patches_by_budget(eligible)
+
+    tasks: list[ContextTask] = []
+    for idx, batch in enumerate(batches):
+        batch_files = [f.filename for f in batch]
+        batch_keywords = []
+        for f in batch:
+            batch_keywords.extend(_file_keywords(f))
+        batch_keywords = list(set(batch_keywords))
+
+        # Check if any file in the batch is individually oversized
+        is_partial = any(
+            estimate_patch_tokens(f) > DEFAULT_PATCH_BATCH_TOKEN_BUDGET
+            for f in batch
+        )
+
+        signals = ["high_priority_file", "baseline_patch_review"]
+        if is_partial:
+            signals.append("partial_patch")
+
         tasks.append(_make_task(
             task_type="patch_deep_dive",
             intent="inspect_patch_complexity",
-            source=TaskSource(file_facts=[f.filename], signals=["high_priority_file"]),
-            target=TaskTarget(files=[f.filename], keywords=_file_keywords(f)),
-            queries=[f"deep dive into patch for {f.filename}"],
+            source=TaskSource(file_facts=batch_files, signals=signals),
+            target=TaskTarget(files=batch_files, keywords=batch_keywords),
+            queries=[f"deep dive into patch for {f}" for f in batch_files],
             priority="medium",
             expected_output="Complexity analysis and improvement suggestions for the patch",
             fallback="Mark as patch-analysis-unavailable",
             index=idx,
-            target_file=f.filename,
+            target_file=batch_files[0],
         ))
-        idx += 1
 
     return tasks
 
@@ -747,27 +820,48 @@ def build_context_task_plan(ctx: PRContext, evidence: list[EvidenceItem] | None 
     all_tasks.extend(_generate_data_context_tasks(ctx, evidence))
     all_tasks.extend(_generate_runtime_context_tasks(ctx, evidence))
 
-    # Track files covered by specific (non-reference) tasks for patch_deep_dive
-    # reference_context and patch_deep_dive can coexist: one finds callers,
-    # the other inspects patch complexity
-    _DEEP_DIVE_COVERAGE_TYPES = {
+    # Track files covered by specialist tasks
+    _SPECIALIST_TYPES = {
         "test_context", "security_context", "config_context",
         "data_context", "runtime_context",
     }
-    covered_files: set[str] = set()
+    specialist_covered_files: set[str] = set()
     for t in all_tasks:
-        if t.task_type in _DEEP_DIVE_COVERAGE_TYPES:
-            covered_files.update(t.target.files)
+        if t.task_type in _SPECIALIST_TYPES:
+            specialist_covered_files.update(t.target.files)
 
-    all_tasks.extend(_generate_patch_deep_dive_tasks(ctx, covered_files))
+    hybrid_enabled = _is_hybrid_enabled()
 
-    # 4.1-4.4: Dedup, sort, summarize, cap
+    if hybrid_enabled:
+        # Hybrid mode: high-priority files remain eligible for baseline
+        all_tasks.extend(_generate_patch_deep_dive_tasks(ctx, specialist_covered_files))
+    else:
+        # Legacy mode: specialist coverage removes files from baseline
+        all_tasks.extend(_generate_patch_deep_dive_tasks(ctx, specialist_covered_files))
+
+    # 4.1-4.5: Dedup, sort, per-type cap, global budget, summarize
     all_tasks = deduplicate_tasks(all_tasks)
     all_tasks = sort_tasks(all_tasks)
     all_tasks = cap_tasks(all_tasks)
-    summary = summarize_tasks(all_tasks)
 
-    return _build_response(ctx.context_id, all_tasks, summary)
+    if hybrid_enabled:
+        all_tasks, omitted = apply_global_budget(all_tasks)
+    else:
+        all_tasks, omitted = apply_global_budget(all_tasks)
+
+    summary = summarize_tasks(all_tasks)
+    if omitted > 0:
+        summary["omitted_candidates"] = omitted
+
+    # Build coverage manifest only in hybrid mode
+    coverage_manifest = None
+    if hybrid_enabled:
+        coverage_manifest = _build_coverage_manifest(ctx, all_tasks, specialist_covered_files)
+        summary["hybrid_baseline_enabled"] = True
+    else:
+        summary["hybrid_baseline_enabled"] = False
+
+    return _build_response(ctx.context_id, all_tasks, summary, coverage_manifest)
 
 
 # --- 4. Store Behavior ---
@@ -820,6 +914,166 @@ def cap_tasks(tasks: list[ContextTask], cap: int = DEFAULT_TASK_CAP) -> list[Con
     return result
 
 
+# --- 4.5 Global task budget ---
+
+_SPECIALIST_TYPES = {"security_context", "config_context", "data_context", "runtime_context"}
+
+# Priority order for global selection:
+# 1. critical/high specialists
+# 2. patch_deep_dive
+# 3. reference_context
+# 4. test_context
+# 5. medium/low specialists
+
+_SELECTION_ORDER = {
+    "security_context_critical": 0,
+    "security_context_high": 0,
+    "config_context_critical": 0,
+    "config_context_high": 0,
+    "data_context_critical": 0,
+    "data_context_high": 0,
+    "runtime_context_critical": 0,
+    "runtime_context_high": 0,
+    "patch_deep_dive": 1,
+    "reference_context": 2,
+    "test_context": 3,
+    "security_context_medium": 4,
+    "security_context_low": 4,
+    "config_context_medium": 4,
+    "config_context_low": 4,
+    "data_context_medium": 4,
+    "data_context_low": 4,
+    "runtime_context_medium": 4,
+    "runtime_context_low": 4,
+}
+
+
+def _selection_key(task: ContextTask) -> tuple[int, str, str]:
+    """Key for stable global selection ordering."""
+    if task.task_type in _SPECIALIST_TYPES:
+        bucket = _SELECTION_ORDER.get(f"{task.task_type}_{task.priority}", 4)
+    else:
+        bucket = _SELECTION_ORDER.get(task.task_type, 5)
+    return (bucket, task.task_type, task.task_id)
+
+
+def apply_global_budget(
+    tasks: list[ContextTask],
+    max_tasks: int = MAX_TASKS_PER_RUN,
+    baseline_capacity: int = DEFAULT_BASELINE_CAPACITY,
+) -> tuple[list[ContextTask], int]:
+    """Select at most max_tasks with reserved baseline capacity.
+
+    Reserves baseline_capacity slots for patch_deep_dive tasks, then fills
+    remaining slots with specialist tasks. Critical specialists may preempt
+    lower-priority baseline tasks if needed.
+
+    Returns (selected_tasks, omitted_count).
+    """
+    if len(tasks) <= max_tasks:
+        return tasks, 0
+
+    # Separate baseline and specialist tasks
+    baseline_tasks = [t for t in tasks if t.task_type == "patch_deep_dive"]
+    specialist_tasks = [t for t in tasks if t.task_type != "patch_deep_dive"]
+
+    # Sort each group by selection priority
+    baseline_sorted = sorted(baseline_tasks, key=_selection_key)
+    specialist_sorted = sorted(specialist_tasks, key=_selection_key)
+
+    # Reserve baseline capacity
+    reserved_baseline = baseline_sorted[:baseline_capacity]
+    remaining_baseline = baseline_sorted[baseline_capacity:]
+
+    # Fill remaining slots with specialists
+    remaining_slots = max_tasks - len(reserved_baseline)
+    if remaining_slots < 0:
+        remaining_slots = 0
+
+    # If we have more baseline than reserved, extras compete with specialists
+    all_competing = remaining_baseline + specialist_sorted
+    all_competing_sorted = sorted(all_competing, key=_selection_key)
+    fillers = all_competing_sorted[:remaining_slots]
+
+    selected = reserved_baseline + fillers
+    selected = sorted(selected, key=_selection_key)
+
+    # Truncate to max_tasks (in case of negative remaining_slots)
+    selected = selected[:max_tasks]
+    omitted = len(tasks) - len(selected)
+    return selected, omitted
+
+
+# --- Coverage manifest builder ---
+
+
+def _build_coverage_manifest(
+    ctx: PRContext,
+    selected_tasks: list[ContextTask],
+    specialist_covered_files: set[str],
+) -> dict[str, Any]:
+    """Build a planned coverage manifest for the selected task plan.
+
+    Records each high-priority file's assigned baseline task, lane, state,
+    and omission or truncation reason.
+    """
+    manifest = CoverageManifest()
+
+    # Find which files are assigned to baseline tasks
+    baseline_files: dict[str, str] = {}  # filename -> task_id
+    baseline_signals: dict[str, list[str]] = {}  # filename -> signals
+    for t in selected_tasks:
+        if t.task_type == "patch_deep_dive":
+            for f in t.target.files:
+                baseline_files[f] = t.task_id
+                baseline_signals[f] = t.source.signals
+
+    # Track all high-priority changed files
+    for f in ctx.files:
+        if not f.is_source or f.is_test or f.is_docs:
+            continue
+
+        is_high_priority = f.priority_score_hint >= 70
+        est_tokens = estimate_patch_tokens(f)
+        is_partial = f.filename in baseline_signals and "partial_patch" in baseline_signals.get(f.filename, [])
+
+        if f.filename in baseline_files:
+            # Assigned to a baseline task
+            manifest.add_entry(CoverageEntry(
+                filename=f.filename,
+                lane=CoverageLane.BASELINE.value,
+                state=CoverageState.PLANNED.value,
+                task_id=baseline_files[f.filename],
+                is_high_priority=is_high_priority,
+                priority_score=f.priority_score_hint,
+                truncated=is_partial,
+                estimated_tokens=est_tokens,
+            ))
+        elif is_high_priority:
+            # High-priority file not assigned to any baseline task
+            manifest.add_entry(CoverageEntry(
+                filename=f.filename,
+                lane=CoverageLane.BASELINE.value,
+                state=CoverageState.OMITTED.value,
+                reason="budget_limit",
+                is_high_priority=True,
+                priority_score=f.priority_score_hint,
+                estimated_tokens=est_tokens,
+            ))
+
+        # Track specialist coverage separately
+        if f.filename in specialist_covered_files:
+            manifest.add_entry(CoverageEntry(
+                filename=f.filename,
+                lane=CoverageLane.SPECIALIST.value,
+                state=CoverageState.PLANNED.value,
+                is_high_priority=is_high_priority,
+                priority_score=f.priority_score_hint,
+            ))
+
+    return manifest.to_dict()
+
+
 # --- Response builder ---
 
 def _task_to_dict(t: ContextTask) -> dict:
@@ -853,11 +1107,19 @@ def _task_to_dict(t: ContextTask) -> dict:
     }
 
 
-def _build_response(context_id: str, tasks: list[ContextTask], summary: dict) -> dict:
-    return {
+def _build_response(
+    context_id: str,
+    tasks: list[ContextTask],
+    summary: dict,
+    coverage_manifest: dict[str, Any] | None = None,
+) -> dict:
+    result = {
         "context_id": context_id,
         "tasks": [_task_to_dict(t) for t in tasks],
         "routes": [route_to_dict(r) for r in TASK_ROUTES.values()],
         "agents": [agent_to_dict(a) for a in AGENT_DEFINITIONS.values()],
         "summary": summary,
     }
+    if coverage_manifest:
+        result["coverage_manifest"] = coverage_manifest
+    return result

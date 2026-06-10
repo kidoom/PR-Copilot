@@ -20,10 +20,9 @@ interface ReviewPanelProps {
   contextId: string
   onClose: () => void
   onFileClick?: (file: string) => void
-  ensureGitHubLogin?: () => Promise<boolean>
 }
 
-export function ReviewPanel({ contextId, onClose, onFileClick, ensureGitHubLogin }: ReviewPanelProps) {
+export function ReviewPanel({ contextId, onClose, onFileClick }: ReviewPanelProps) {
   const [phase, setPhase] = useState<PanelPhase>("idle")
   const [runId, setRunId] = useState<string | null>(null)
   const [events, setEvents] = useState<ReviewRunEvent[]>([])
@@ -88,8 +87,6 @@ export function ReviewPanel({ contextId, onClose, onFileClick, ensureGitHubLogin
   }, [])
 
   const startReview = useCallback(async () => {
-    if (ensureGitHubLogin && !(await ensureGitHubLogin())) return
-
     setPhase("running")
     setError(null)
     setEvents([])
@@ -120,7 +117,7 @@ export function ReviewPanel({ contextId, onClose, onFileClick, ensureGitHubLogin
       setPhase("failed")
       setError(e instanceof Error ? e.message : "Failed to start review")
     }
-  }, [contextId, ensureGitHubLogin, handleEvent])
+  }, [contextId, handleEvent])
 
   const handleCancel = useCallback(async () => {
     if (!runId) return

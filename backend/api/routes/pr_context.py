@@ -1,12 +1,7 @@
-import os
-
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.api.routes.github_auth import (
-    get_authenticated_github_session,
-)
-from backend.domain.github.auth import GitHubAuthError, get_github_auth_service
+from backend.domain.github.local_credentials import resolve_github_token
 from backend.domain.github.url_parser import parse_pr_url
 from backend.domain.github.client import GitHubClient, GitHubAPIError
 from backend.domain.pr_context.context_manager import (
@@ -22,26 +17,18 @@ router = APIRouter(prefix="/api/pr", tags=["pr-context"])
 
 class ContextRequest(BaseModel):
     pr_url: str
-    github_token: str | None = None
 
 
 @router.post("/context")
-async def create_context(req: ContextRequest, request: Request):
+async def create_context(req: ContextRequest):
     """Create a PRContext from a GitHub PR URL."""
     try:
         parsed = parse_pr_url(req.pr_url)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    session = await get_authenticated_github_session(request)
-    session_token = session.access_token if session is not None else None
-    token = (
-        session_token
-        or req.github_token
-        or os.environ.get("PR_COPILOT_GITHUB_TOKEN")
-        or os.environ.get("GITHUB_TOKEN")
-    )
-    client = GitHubClient(token=token)
+    cred = resolve_github_token()
+    client = GitHubClient(token=cred.token or None)
     try:
         try:
             pr_raw = await client.get_pr(parsed.owner, parsed.repo, parsed.pull_number)
@@ -50,33 +37,12 @@ async def create_context(req: ContextRequest, request: Request):
         except GitHubAPIError as e:
             status = e.status_code
             if status == 401:
-                raise HTTPException(status_code=401, detail=e.message)
+                raise HTTPException(status_code=401, detail=_auth_guidance(e.message))
             if status == 403:
                 if e.error_category == "rate_limit":
-                    raise HTTPException(status_code=429, detail=e.message)
-                raise HTTPException(status_code=403, detail=e.message)
+                    raise HTTPException(status_code=429, detail=_auth_guidance(e.message))
+                raise HTTPException(status_code=403, detail=_auth_guidance(e.message))
             if status == 404:
-                if session is not None:
-                    try:
-                        access = await get_github_auth_service().repository_access(
-                            session.session_id,
-                            owner=parsed.owner,
-                            repo=parsed.repo,
-                        )
-                    except GitHubAuthError:
-                        access = {"authorized": False}
-                    if not access["authorized"]:
-                        raise HTTPException(
-                            status_code=403,
-                            detail={
-                                "code": "github_app_repository_access_required",
-                                "message": (
-                                    "Connect this repository to the GitHub App, "
-                                    "then try the PR analysis again."
-                                ),
-                                "install_url": "/api/auth/github/install",
-                            },
-                        )
                 raise HTTPException(status_code=404, detail=e.message)
             raise HTTPException(status_code=502, detail=e.message)
     finally:
@@ -87,6 +53,17 @@ async def create_context(req: ContextRequest, request: Request):
         owner=parsed.owner, repo=parsed.repo, pull_number=parsed.pull_number,
     )
     return get_overview_view(ctx)
+
+
+def _auth_guidance(original_message: str) -> dict:
+    """Return actionable guidance for private repo or rate-limit errors."""
+    return {
+        "message": original_message,
+        "guidance": (
+            "GitHub credentials are needed. Run `gh auth login` or set "
+            "the GH_TOKEN environment variable, then retry."
+        ),
+    }
 
 
 @router.get("/context/{context_id}/patch-index")

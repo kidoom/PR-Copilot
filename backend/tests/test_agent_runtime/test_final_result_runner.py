@@ -23,8 +23,9 @@ async def test_final_result_contains_all_fields():
     )
     d = result.to_dict()
     for key in ("status", "summary", "findings", "uncertainties", "notes",
-                "task_summaries", "raw_output", "steps", "stopped_by_max_steps", "token_usage"):
+                "task_summaries", "steps", "stopped_by_max_steps", "token_usage"):
         assert key in d, f"Missing key: {key}"
+    assert "raw_output" not in d  # excluded from frontend payload
 
 
 def test_final_result_promotes_only_valid_findings():

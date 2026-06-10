@@ -1,6 +1,5 @@
 import type {
   PrContextResponse,
-  GitHubAuthSession,
   IntakeSummary,
   FilePatchResponse,
   ReviewRunEvent,
@@ -18,14 +17,14 @@ type UnknownRecord = Record<string, unknown>
 export class ApiError extends Error {
   status: number
   code: string
-  actionUrl: string
+  guidance: string
 
-  constructor(message: string, status: number, code = "", actionUrl = "") {
+  constructor(message: string, status: number, code = "", guidance = "") {
     super(message)
     this.name = "ApiError"
     this.status = status
     this.code = code
-    this.actionUrl = actionUrl
+    this.guidance = guidance
   }
 }
 
@@ -109,61 +108,15 @@ async function throwApiError(res: Response, fallback: string): Promise<never> {
     asString(structured.message, fallback),
     res.status,
     asString(structured.code),
-    asString(structured.install_url),
+    asString(structured.guidance),
   )
 }
 
-export async function getGitHubAuthSession(): Promise<GitHubAuthSession> {
-  const res = await fetch(apiUrl("/api/auth/session"), { credentials: "include" })
-  if (!res.ok) {
-    throw new Error(`Failed to load GitHub login status: ${res.status}`)
-  }
-  return res.json()
-}
-
-export async function requireGitHubAuth(): Promise<GitHubAuthSession> {
-  const session = await getGitHubAuthSession()
-  if (!session.authenticated) {
-    throw new Error("Sign in with GitHub before continuing.")
-  }
-  return session
-}
-
-export async function getGitHubInstallationsStatus(): Promise<{ installed: boolean; count: number }> {
-  const res = await fetch(apiUrl("/api/auth/github/installations/status"), { credentials: "include" })
-  if (!res.ok) {
-    return { installed: false, count: 0 }
-  }
-  return res.json()
-}
-
-export function getGitHubLoginUrl(): string {
-  return apiUrl("/api/auth/github/login")
-}
-
-export function getGitHubInstallUrl(): string {
-  return apiUrl("/api/auth/github/install")
-}
-
-export async function logoutGitHub(): Promise<void> {
-  const res = await fetch(apiUrl("/api/auth/logout"), { method: "POST", credentials: "include" })
-  if (!res.ok) {
-    throw new Error(`Failed to log out: ${res.status}`)
-  }
-}
-
-export async function analyzePr(
-  prUrl: string,
-  githubToken?: string,
-): Promise<PrContextResponse> {
+export async function analyzePr(prUrl: string): Promise<PrContextResponse> {
   const res = await fetch(apiUrl("/api/pr/context"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify({
-      pr_url: prUrl,
-      github_token: githubToken || undefined,
-    }),
+    body: JSON.stringify({ pr_url: prUrl }),
   })
 
   if (!res.ok) {
@@ -177,7 +130,6 @@ export async function getIntakeSummary(contextId: string): Promise<IntakeSummary
   const res = await fetch(apiUrl("/api/review/intake"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    credentials: "include",
     body: JSON.stringify({ context_id: contextId }),
   })
 
@@ -196,7 +148,6 @@ export async function getFilePatch(
   const encodedFilename = encodeURIComponent(filename)
   const res = await fetch(
     apiUrl(`/api/pr/context/${contextId}/files/${encodedFilename}/patch`),
-    { credentials: "include" },
   )
 
   if (!res.ok) {
@@ -214,7 +165,6 @@ export async function createReviewRun(
   const res = await fetch(apiUrl("/api/review/runs"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    credentials: "include",
     body: JSON.stringify({
       context_id: contextId,
       local_repo_root: localRepoRoot || undefined,
@@ -230,7 +180,7 @@ export async function createReviewRun(
 export async function getReviewRun(
   runId: string,
 ): Promise<ReviewRunStatusResponse> {
-  const res = await fetch(apiUrl(`/api/review/runs/${encodeURIComponent(runId)}`), { credentials: "include" })
+  const res = await fetch(apiUrl(`/api/review/runs/${encodeURIComponent(runId)}`))
   if (!res.ok) {
     const body = await res.json().catch(() => ({ detail: "Unknown error" }))
     throw new Error(body.detail || `Request failed: ${res.status}`)
@@ -243,7 +193,7 @@ export async function cancelReviewRun(
 ): Promise<{ run_id: string; status: string }> {
   const res = await fetch(
     apiUrl(`/api/review/runs/${encodeURIComponent(runId)}/cancel`),
-    { method: "POST", credentials: "include" },
+    { method: "POST" },
   )
   if (!res.ok) {
     const body = await res.json().catch(() => ({ detail: "Unknown error" }))

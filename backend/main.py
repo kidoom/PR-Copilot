@@ -1,14 +1,11 @@
 import os
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 
 load_dotenv(".env.local", override=False)
 
-from backend.api.routes.github_auth import get_authenticated_github_session
-from backend.api.routes.github_auth import router as github_auth_router
 from backend.api.routes.pr_context import router as pr_context_router
 from backend.api.routes.review import router as review_pipeline_router
 from backend.api.routes.review_runs import router as review_runs_router
@@ -36,18 +33,6 @@ def _cors_origins() -> list[str]:
     ]
 
 
-@app.middleware("http")
-async def require_github_login(request: Request, call_next):
-    if request.url.path.startswith(("/api/pr", "/api/review")):
-        session = await get_authenticated_github_session(request)
-        if session is None:
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "GitHub login required"},
-            )
-    return await call_next(request)
-
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins(),
@@ -56,7 +41,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(github_auth_router)
 app.include_router(pr_context_router)
 app.include_router(review_pipeline_router)
 app.include_router(review_runs_router)

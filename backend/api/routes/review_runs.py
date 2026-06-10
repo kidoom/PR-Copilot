@@ -4,14 +4,14 @@ import asyncio
 import os
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.api.routes.github_auth import get_authenticated_github_token
 from backend.agent.runtime.main_runner import run_main_agent
 from backend.agent.tools.repo_context.provider.models import PRIdentity
 from backend.agent.runtime.run_manager import RunManager, RunNotFoundError
 from backend.deps import get_agent_deps
+from backend.domain.github.local_credentials import resolve_github_token
 from backend.domain.pr_context.context_manager import get_context
 from backend.domain.review.context_task_planner import build_context_task_plan
 from backend.domain.review.evidence import analyze as analyze_evidence
@@ -31,7 +31,7 @@ class CreateRunRequest(BaseModel):
 
 
 @router.post("")
-async def create_run(req: CreateRunRequest, request: Request):
+async def create_run(req: CreateRunRequest):
     ctx = get_context(req.context_id)
     if ctx is None:
         raise HTTPException(status_code=404, detail=f"Context not found: {req.context_id}")
@@ -41,18 +41,14 @@ async def create_run(req: CreateRunRequest, request: Request):
 
     run = _run_manager.create_run(req.context_id)
 
-    token = (
-        await get_authenticated_github_token(request)
-        or os.environ.get("PR_COPILOT_GITHUB_TOKEN")
-        or os.environ.get("GITHUB_TOKEN")
-    )
+    cred = resolve_github_token()
     task = asyncio.create_task(
         _execute_run(
             run.run_id,
             req.context_id,
             task_plan,
             req.local_repo_root,
-            token,
+            cred.token or None,
         )
     )
     _run_manager.register_execution_task(run.run_id, task)
