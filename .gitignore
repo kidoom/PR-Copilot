@@ -10,5 +10,8 @@ __pycache__/
 # Runtime data
 .pr-copilot/
 
+# Claude Code local settings
+.claude/
+
 # Openspec (not for production)
 openspec/
