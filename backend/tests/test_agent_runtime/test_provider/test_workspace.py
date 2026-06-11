@@ -15,6 +15,7 @@ from backend.agent.tools.repo_context.provider.models import (
 from backend.agent.tools.repo_context.provider.workspace import (
     RepoWorkspaceManager,
     _prepare_temp_clone,
+    _sanitize_dir_name,
     _verify_local_identity,
     _create_askpass_script,
     _cleanup_askpass,
@@ -241,3 +242,20 @@ class TestRepoWorkspaceManager:
             assert result.ok is False
             assert result.error is not None
             assert result.error.kind == PreparationErrorKind.CLONE_FAILED
+
+
+class TestSanitizeDirName:
+    def test_normal_name_unchanged(self):
+        assert _sanitize_dir_name("my-repo") == "my-repo"
+
+    def test_strips_invalid_chars(self):
+        assert _sanitize_dir_name("org:repo") == "org_repo"
+        assert _sanitize_dir_name("a<b>c") == "a_b_c"
+        assert _sanitize_dir_name('a"b') == "a_b"
+
+    def test_strips_trailing_dots_and_spaces(self):
+        assert _sanitize_dir_name("repo...") == "repo"
+        assert _sanitize_dir_name("repo   ") == "repo"
+
+    def test_empty_returns_repo(self):
+        assert _sanitize_dir_name("") == "repo"

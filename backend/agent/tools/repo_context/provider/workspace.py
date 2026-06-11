@@ -87,16 +87,28 @@ def _cleanup_askpass(askpass_dir: str) -> None:
         pass
 
 
+def _sanitize_dir_name(name: str) -> str:
+    """Remove characters that are invalid in Windows directory names."""
+    # Windows forbidden: < > : " / \ | ? *
+    invalid = '<>:"/\\|?*'
+    for ch in invalid:
+        name = name.replace(ch, "_")
+    # Strip trailing dots/spaces (Windows silently strips them, causing confusion)
+    name = name.rstrip(". ")
+    return name or "repo"
+
+
 def _prepare_temp_clone(
     identity: PRIdentity,
     temp_root: str,
     token: str | None = None,
 ) -> tuple[str | None, str | None]:
     os.makedirs(temp_root, exist_ok=True)
-    clone_dir = os.path.join(
-        temp_root,
-        f"{identity.owner}__{identity.repo}__{identity.head_sha[:12]}__{uuid.uuid4().hex[:8]}",
-    )
+    # Sanitize each component and keep the name short to avoid MAX_PATH issues on Windows
+    owner = _sanitize_dir_name(identity.owner)[:40]
+    repo = _sanitize_dir_name(identity.repo)[:40]
+    dir_name = f"{owner}__{repo}__{identity.head_sha[:8]}__{uuid.uuid4().hex[:6]}"
+    clone_dir = os.path.join(temp_root, dir_name)
 
     askpass_dir: str | None = None
     try:
