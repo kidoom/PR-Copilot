@@ -27,10 +27,9 @@ export class ErrorBoundary extends Component<
       return (
         <div className="min-h-screen bg-background p-6 text-foreground">
           <div className="mx-auto max-w-xl rounded-lg border bg-card p-5 shadow-sm">
-            <h1 className="text-lg font-semibold">PR Copilot hit a UI error</h1>
+            <h1 className="text-lg font-semibold">PR Copilot 遇到界面错误</h1>
             <p className="mt-2 text-sm text-muted-foreground">
-              The page recovered instead of going blank. Please refresh and try
-              the analysis again.
+              页面已恢复而非显示空白。请刷新后重新尝试分析。
             </p>
             <pre className="mt-4 overflow-auto rounded-md bg-muted p-3 text-xs">
               {this.state.error.message}
@@ -43,7 +42,7 @@ export class ErrorBoundary extends Component<
               }}
               type="button"
             >
-              Reload page
+              刷新页面
             </button>
           </div>
         </div>

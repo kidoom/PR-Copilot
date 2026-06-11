@@ -75,7 +75,7 @@ export function FindingCard({
               {finding.severity}
             </Badge>
             <span className="text-xs text-muted-foreground">
-              {Math.round(finding.confidence * 100)}% confidence
+              {Math.round(finding.confidence * 100)}% 置信度
             </span>
           </div>
           <p className="mt-1 break-words text-sm font-medium">{finding.claim}</p>
@@ -89,8 +89,7 @@ export function FindingCard({
               ) : (
                 <ChevronRight className="h-3 w-3" />
               )}
-              {finding.evidence.length} evidence
-              {finding.evidence.length !== 1 ? "s" : ""}
+              {finding.evidence.length} 条证据
             </button>
           )}
         </div>
@@ -98,7 +97,7 @@ export function FindingCard({
           <button
             className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
             onClick={() => onFileClick?.(finding.evidence[0].file)}
-            title="Open in diff viewer"
+            title="在差异查看器中打开"
           >
             <ExternalLink className="h-3 w-3" />
           </button>
@@ -131,16 +130,16 @@ export function SeveritySummary({ findings }: { findings: NormalizedFinding[] })
   return (
     <div className="flex items-center gap-2 text-xs">
       {counts.critical > 0 && (
-        <Badge variant="destructive">{counts.critical} critical</Badge>
+        <Badge variant="destructive">{counts.critical} 严重</Badge>
       )}
       {counts.high > 0 && (
-        <Badge variant="destructive">{counts.high} high</Badge>
+        <Badge variant="destructive">{counts.high} 高</Badge>
       )}
       {counts.medium > 0 && (
-        <Badge variant="secondary">{counts.medium} medium</Badge>
+        <Badge variant="secondary">{counts.medium} 中</Badge>
       )}
-      {counts.low > 0 && <Badge variant="outline">{counts.low} low</Badge>}
-      {counts.info > 0 && <Badge variant="outline">{counts.info} info</Badge>}
+      {counts.low > 0 && <Badge variant="outline">{counts.low} 低</Badge>}
+      {counts.info > 0 && <Badge variant="outline">{counts.info} 信息</Badge>}
     </div>
   )
 }

@@ -79,7 +79,7 @@ export function ReviewPanel({ contextId, onClose, onFileClick }: ReviewPanelProp
     }
     if (event.type === "run.failed") {
       setPhase("failed")
-      setError((p.error as string) || "Unknown error")
+      setError((p.error as string) || "未知错误")
     }
     if (event.type === "run.cancelled") {
       setPhase("cancelled")
@@ -115,7 +115,7 @@ export function ReviewPanel({ contextId, onClose, onFileClick }: ReviewPanelProp
       )
     } catch (e) {
       setPhase("failed")
-      setError(e instanceof Error ? e.message : "Failed to start review")
+      setError(e instanceof Error ? e.message : "启动审查失败")
     }
   }, [contextId, handleEvent])
 
@@ -148,7 +148,7 @@ export function ReviewPanel({ contextId, onClose, onFileClick }: ReviewPanelProp
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden border-l bg-card">
       <div className="flex items-center justify-between border-b px-3 py-2">
-        <h3 className="text-sm font-semibold">AI Review</h3>
+        <h3 className="text-sm font-semibold">AI 审查</h3>
         <div className="flex items-center gap-2">
           {isRunning && (
             <Button
@@ -157,7 +157,7 @@ export function ReviewPanel({ contextId, onClose, onFileClick }: ReviewPanelProp
               onClick={handleCancel}
               className="h-7 text-xs"
             >
-              Cancel
+              取消
             </Button>
           )}
           {isTerminal && (
@@ -167,7 +167,7 @@ export function ReviewPanel({ contextId, onClose, onFileClick }: ReviewPanelProp
               onClick={handleRerun}
               className="h-7 text-xs"
             >
-              Re-run
+              重新运行
             </Button>
           )}
           <Button
@@ -190,10 +190,10 @@ export function ReviewPanel({ contextId, onClose, onFileClick }: ReviewPanelProp
             <Play className="h-6 w-6 text-muted-foreground" />
           </div>
           <p className="text-sm text-muted-foreground">
-            Start an AI review to analyze this PR with specialized agents.
+            启动 AI 审查，使用专业 Agent 分析此 PR。
           </p>
           <Button onClick={startReview} size="sm">
-            Start AI Review
+            启动 AI 审查
           </Button>
         </div>
       )}
@@ -216,8 +216,8 @@ export function ReviewPanel({ contextId, onClose, onFileClick }: ReviewPanelProp
               <Loader2 className="h-3 w-3 animate-spin" />
               <span>
                 {streamConnected
-                  ? "Analyzing PR with specialized agents..."
-                  : "Connecting to live progress..."}
+                  ? "正在使用专业 Agent 分析 PR..."
+                  : "正在连接实时进度..."}
               </span>
             </div>
           )}
@@ -239,7 +239,7 @@ export function ReviewPanel({ contextId, onClose, onFileClick }: ReviewPanelProp
           {phase === "cancelled" && (
             <div className="flex items-center gap-2 border-t border-yellow-200 bg-yellow-50 px-3 py-2 text-xs text-yellow-700 dark:border-yellow-900/50 dark:bg-yellow-950/30 dark:text-yellow-300">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-              <span>Review was cancelled</span>
+              <span>审查已取消</span>
             </div>
           )}
 
@@ -254,7 +254,7 @@ export function ReviewPanel({ contextId, onClose, onFileClick }: ReviewPanelProp
                   )}
                   <div className="min-w-0">
                     <p className={`text-xs font-semibold ${finalResult.status === "partial" ? "text-yellow-700 dark:text-yellow-400" : "text-green-700 dark:text-green-400"}`}>
-                      Review {finalResult.status === "partial" ? "partially completed" : "completed"}
+                      审查{finalResult.status === "partial" ? "部分完成" : "已完成"}
                     </p>
                     <p className="mt-1 break-words text-xs text-muted-foreground">
                       {finalResult.summary}
@@ -262,33 +262,33 @@ export function ReviewPanel({ contextId, onClose, onFileClick }: ReviewPanelProp
                   </div>
                 </div>
                 <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-                  <span>{findings.length} findings</span>
+                  <span>{findings.length} 个发现</span>
                   <span aria-hidden="true">|</span>
-                  <span>{validTasks}/{totalTasks} tasks validated</span>
+                  <span>{validTasks}/{totalTasks} 个任务已验证</span>
                   {finalResult.stopped_by_max_steps && (
                     <>
                       <span aria-hidden="true">|</span>
-                      <span>Step limit reached</span>
+                      <span>已达步数上限</span>
                     </>
                   )}
                   {finalResult.coverage_counts?.baseline_reviewed != null && (
                     <>
                       <span aria-hidden="true">|</span>
-                      <span>{finalResult.coverage_counts.baseline_reviewed} files reviewed</span>
+                      <span>{finalResult.coverage_counts.baseline_reviewed} 个文件已审查</span>
                     </>
                   )}
                   {finalResult.coverage_counts?.uncovered_high_priority != null && finalResult.coverage_counts.uncovered_high_priority > 0 && (
                     <>
                       <span aria-hidden="true">|</span>
                       <span className="text-yellow-600 dark:text-yellow-400">
-                        {finalResult.coverage_counts.uncovered_high_priority} uncovered
+                        {finalResult.coverage_counts.uncovered_high_priority} 个未覆盖
                       </span>
                     </>
                   )}
                   {finalResult.run_usage && (
                     <>
                       <span aria-hidden="true">|</span>
-                      <span>{finalResult.run_usage.total_model_calls} model calls</span>
+                      <span>{finalResult.run_usage.total_model_calls} 次模型调用</span>
                       <span aria-hidden="true">|</span>
                       <span>{Math.round((finalResult.run_usage.total_input_tokens + finalResult.run_usage.total_output_tokens) / 1000)}k tokens</span>
                     </>
@@ -302,22 +302,22 @@ export function ReviewPanel({ contextId, onClose, onFileClick }: ReviewPanelProp
                   <div className="flex flex-wrap gap-1.5">
                     {finalResult.coverage_counts.baseline_reviewed > 0 && (
                       <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">
-                        {finalResult.coverage_counts.baseline_reviewed} reviewed
+                        {finalResult.coverage_counts.baseline_reviewed} 已审查
                       </span>
                     )}
                     {finalResult.coverage_counts.baseline_partial != null && finalResult.coverage_counts.baseline_partial > 0 && (
                       <span className="inline-flex items-center rounded-full bg-yellow-100 px-2 py-0.5 text-[10px] font-medium text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400">
-                        {finalResult.coverage_counts.baseline_partial} partial
+                        {finalResult.coverage_counts.baseline_partial} 部分
                       </span>
                     )}
                     {finalResult.coverage_counts.baseline_omitted != null && finalResult.coverage_counts.baseline_omitted > 0 && (
                       <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-600 dark:bg-gray-800 dark:text-gray-400">
-                        {finalResult.coverage_counts.baseline_omitted} omitted
+                        {finalResult.coverage_counts.baseline_omitted} 已跳过
                       </span>
                     )}
                     {finalResult.coverage_counts.baseline_failed != null && finalResult.coverage_counts.baseline_failed > 0 && (
                       <span className="inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-medium text-red-700 dark:bg-red-900/30 dark:text-red-400">
-                        {finalResult.coverage_counts.baseline_failed} failed
+                        {finalResult.coverage_counts.baseline_failed} 失败
                       </span>
                     )}
                   </div>
@@ -328,7 +328,7 @@ export function ReviewPanel({ contextId, onClose, onFileClick }: ReviewPanelProp
               {finalResult.uncovered_high_priority_paths && finalResult.uncovered_high_priority_paths.length > 0 && (
                 <details className="border-b px-3 py-2">
                   <summary className="cursor-pointer text-[11px] font-semibold text-yellow-700 dark:text-yellow-400">
-                    Uncovered high-priority files ({finalResult.uncovered_high_priority_paths.length})
+                    未覆盖的高优先级文件 ({finalResult.uncovered_high_priority_paths.length})
                   </summary>
                   <ul className="mt-1.5 space-y-0.5 pl-4 text-[11px] text-muted-foreground">
                     {finalResult.uncovered_high_priority_paths.map((file, index) => (
@@ -342,42 +342,42 @@ export function ReviewPanel({ contextId, onClose, onFileClick }: ReviewPanelProp
               {finalResult.run_usage && (
                 <details className="border-b px-3 py-2">
                   <summary className="cursor-pointer text-[11px] font-semibold">
-                    Resource usage
+                    资源用量
                   </summary>
                   <div className="mt-1.5 space-y-1 text-[11px] text-muted-foreground">
                     <div className="flex justify-between">
-                      <span>Model calls</span>
+                      <span>模型调用</span>
                       <span>{finalResult.run_usage.total_model_calls}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span>Input tokens</span>
+                      <span>输入 tokens</span>
                       <span>{finalResult.run_usage.total_input_tokens.toLocaleString()}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span>Output tokens</span>
+                      <span>输出 tokens</span>
                       <span>{finalResult.run_usage.total_output_tokens.toLocaleString()}</span>
                     </div>
                     {finalResult.run_usage.total_observation_tokens > 0 && (
                       <div className="flex justify-between">
-                        <span>Observation tokens</span>
+                        <span>观察 tokens</span>
                         <span>{finalResult.run_usage.total_observation_tokens.toLocaleString()}</span>
                       </div>
                     )}
                     {finalResult.run_usage.total_elapsed_ms > 0 && (
                       <div className="flex justify-between">
-                        <span>Elapsed time</span>
+                        <span>耗时</span>
                         <span>{(finalResult.run_usage.total_elapsed_ms / 1000).toFixed(1)}s</span>
                       </div>
                     )}
                     {finalResult.run_usage.total_retries > 0 && (
                       <div className="flex justify-between">
-                        <span>Retries</span>
+                        <span>重试次数</span>
                         <span>{finalResult.run_usage.total_retries}</span>
                       </div>
                     )}
                     {finalResult.run_usage.total_fallbacks > 0 && (
                       <div className="flex justify-between">
-                        <span>Fallbacks</span>
+                        <span>降级次数</span>
                         <span>{finalResult.run_usage.total_fallbacks}</span>
                       </div>
                     )}
@@ -389,7 +389,7 @@ export function ReviewPanel({ contextId, onClose, onFileClick }: ReviewPanelProp
                 <div className="px-3 py-3">
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                     <h4 className="text-xs font-semibold">
-                      Findings ({findings.length})
+                      发现 ({findings.length})
                     </h4>
                     <SeveritySummary findings={findings} />
                   </div>
@@ -405,14 +405,14 @@ export function ReviewPanel({ contextId, onClose, onFileClick }: ReviewPanelProp
                 </div>
               ) : (
                 <div className="px-3 py-4 text-xs text-muted-foreground">
-                  No evidence-backed issues found.
+                  未发现有证据支持的问题。
                 </div>
               )}
 
               {finalResult.uncertainties.length > 0 && (
                 <details className="border-t px-3 py-3">
                   <summary className="cursor-pointer text-xs font-semibold">
-                    Uncertainties ({finalResult.uncertainties.length})
+                    不确定项 ({finalResult.uncertainties.length})
                   </summary>
                   <ul className="mt-2 space-y-1 pl-4 text-xs text-muted-foreground">
                     {finalResult.uncertainties.map((item, index) => (
@@ -427,7 +427,7 @@ export function ReviewPanel({ contextId, onClose, onFileClick }: ReviewPanelProp
               {finalResult.notes.length > 0 && (
                 <details className="border-t px-3 py-3">
                   <summary className="cursor-pointer text-xs font-semibold">
-                    Notes ({finalResult.notes.length})
+                    备注 ({finalResult.notes.length})
                   </summary>
                   <ul className="mt-2 space-y-1 pl-4 text-xs text-muted-foreground">
                     {finalResult.notes.map((item, index) => (
@@ -443,7 +443,7 @@ export function ReviewPanel({ contextId, onClose, onFileClick }: ReviewPanelProp
 
           {phase === "completed" && !finalResult && (
             <div className="flex flex-1 items-center justify-center px-3 py-4 text-xs text-muted-foreground">
-              Review completed without a structured result.
+              审查已完成，但未产生结构化结果。
             </div>
           )}
         </div>

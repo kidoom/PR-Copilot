@@ -30,7 +30,7 @@ function EventLine({ event }: { event: ReviewRunEvent }) {
     return (
       <div className="flex items-center gap-2 py-1 text-green-400">
         <Play className="h-3.5 w-3.5 shrink-0" />
-        <span className="font-mono text-xs">Review started</span>
+        <span className="font-mono text-xs">审查已开始</span>
       </div>
     )
   }
@@ -63,7 +63,7 @@ function EventLine({ event }: { event: ReviewRunEvent }) {
         )}
         <span className="font-mono text-xs">
           {tool.tool_name}
-          {tool.is_error && " (error)"}
+          {tool.is_error && " (错误)"}
         </span>
       </div>
     )
@@ -75,7 +75,7 @@ function EventLine({ event }: { event: ReviewRunEvent }) {
       <div className="flex items-center gap-2 py-1 text-yellow-400">
         <Bot className="h-3.5 w-3.5 shrink-0" />
         <span className="font-mono text-xs">
-          [{sub.agent_type}] started
+          [{sub.agent_type}] 已启动
           {sub.task_type && (
             <span className="ml-1 text-yellow-300/60">
               ({sub.task_type})
@@ -100,7 +100,7 @@ function EventLine({ event }: { event: ReviewRunEvent }) {
         <Bot className="h-3.5 w-3.5 shrink-0" />
         <span className="font-mono text-xs">
           [{sub.agent_type}] {status}
-          {sub.stopped_by_max_steps && " (max steps)"}
+          {sub.stopped_by_max_steps && " (已达步数上限)"}
         </span>
       </div>
     )
@@ -121,7 +121,7 @@ function EventLine({ event }: { event: ReviewRunEvent }) {
     return (
       <div className="flex items-center gap-2 py-1 text-green-400">
         <CheckCircle className="h-3.5 w-3.5 shrink-0" />
-        <span className="font-mono text-xs font-medium">Review completed</span>
+        <span className="font-mono text-xs font-medium">审查已完成</span>
       </div>
     )
   }
@@ -132,7 +132,7 @@ function EventLine({ event }: { event: ReviewRunEvent }) {
       <div className="flex items-center gap-2 py-1 text-red-400">
         <XCircle className="h-3.5 w-3.5 shrink-0" />
         <span className="font-mono text-xs">
-          Review failed{error ? `: ${error}` : ""}
+          审查失败{error ? `: ${error}` : ""}
         </span>
       </div>
     )
@@ -142,7 +142,7 @@ function EventLine({ event }: { event: ReviewRunEvent }) {
     return (
       <div className="flex items-center gap-2 py-1 text-yellow-400">
         <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-        <span className="font-mono text-xs">Review cancelled</span>
+        <span className="font-mono text-xs">审查已取消</span>
       </div>
     )
   }
@@ -165,7 +165,7 @@ function ProgressBar({
       <div className="flex items-center gap-2">
         <Loader2 className="h-3 w-3 animate-spin" />
         <span>
-          Tasks: {completed}/{total}
+          任务: {completed}/{total}
         </span>
       </div>
       <div className="h-3 w-24 overflow-hidden rounded-full bg-muted">
@@ -215,7 +215,7 @@ export function TerminalStream({
       >
         {events.length === 0 && (
           <div className="py-8 text-center text-muted-foreground">
-            Waiting for events...
+            等待事件...
           </div>
         )}
         {events.map((event) => (
