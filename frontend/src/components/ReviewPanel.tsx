@@ -1,13 +1,16 @@
 import { useState, useEffect, useRef, useCallback } from "react"
-import { X, Play, Loader2, AlertTriangle, CheckCircle2, AlertCircle } from "lucide-react"
+import { X, Play, Loader2, AlertTriangle, CheckCircle2, AlertCircle, History } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { TerminalStream } from "./TerminalStream"
 import { FindingCard, SeveritySummary } from "./FindingCard"
 import {
   createReviewRun,
   cancelReviewRun,
+  getReviewRun,
+  listReviewRuns,
   subscribeToReviewRun,
 } from "@/api"
+import type { ReviewHistoryRun } from "@/api"
 import type {
   ReviewRunEvent,
   FinalReviewResult,
@@ -17,29 +20,38 @@ import type {
 type PanelPhase = "idle" | "running" | "completed" | "failed" | "cancelled"
 
 interface ReviewPanelProps {
-  contextId: string
+  contextId?: string
   onClose: () => void
   onFileClick?: (file: string) => void
+  initialResult?: FinalReviewResult | null
 }
 
-export function ReviewPanel({ contextId, onClose, onFileClick }: ReviewPanelProps) {
-  const [phase, setPhase] = useState<PanelPhase>("idle")
+export function ReviewPanel({ contextId, onClose, onFileClick, initialResult }: ReviewPanelProps) {
+  const [phase, setPhase] = useState<PanelPhase>(initialResult ? "completed" : "idle")
   const [runId, setRunId] = useState<string | null>(null)
   const [events, setEvents] = useState<ReviewRunEvent[]>([])
-  const [finalResult, setFinalResult] = useState<FinalReviewResult | null>(null)
+  const [finalResult, setFinalResult] = useState<FinalReviewResult | null>(initialResult ?? null)
   const [error, setError] = useState<string | null>(null)
   const [subagentTotal, setSubagentTotal] = useState(0)
   const [subagentCompleted, setSubagentCompleted] = useState(0)
   const [tokenUsage, setTokenUsage] = useState({ input: 0, output: 0 })
   const [streamConnected, setStreamConnected] = useState(false)
   const [streamError, setStreamError] = useState<string | null>(null)
+  const [showHistory, setShowHistory] = useState(false)
+  const [historyRuns, setHistoryRuns] = useState<ReviewHistoryRun[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
 
   const cleanupRef = useRef<(() => void) | null>(null)
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const seenIdsRef = useRef(new Set<string>())
 
   const cleanup = useCallback(() => {
     cleanupRef.current?.()
     cleanupRef.current = null
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current)
+      pollTimerRef.current = null
+    }
   }, [])
 
   useEffect(() => {
@@ -87,6 +99,7 @@ export function ReviewPanel({ contextId, onClose, onFileClick }: ReviewPanelProp
   }, [])
 
   const startReview = useCallback(async () => {
+    if (!contextId) return
     setPhase("running")
     setError(null)
     setEvents([])
@@ -111,6 +124,44 @@ export function ReviewPanel({ contextId, onClose, onFileClick }: ReviewPanelProp
         (message) => {
           setStreamConnected(false)
           setStreamError(message)
+          // Start polling fallback when WS drops
+          if (!pollTimerRef.current) {
+            pollTimerRef.current = setInterval(async () => {
+              try {
+                const status = await getReviewRun(run_id)
+                if (
+                  status.status === "completed" ||
+                  status.status === "failed" ||
+                  status.status === "cancelled"
+                ) {
+                  clearInterval(pollTimerRef.current!)
+                  pollTimerRef.current = null
+                  setStreamError(null)
+                  const payload: Record<string, unknown> =
+                    status.status === "completed"
+                      ? { ...(status.final_result ?? {}) }
+                      : status.status === "failed"
+                        ? { error: status.error_summary || "未知错误" }
+                        : {}
+                  handleEvent({
+                    event_id: `poll_${Date.now()}`,
+                    run_id: status.run_id,
+                    type:
+                      status.status === "completed"
+                        ? "run.completed"
+                        : status.status === "failed"
+                          ? "run.failed"
+                          : "run.cancelled",
+                    sequence: 9999,
+                    created_at: new Date().toISOString(),
+                    payload,
+                  })
+                }
+              } catch {
+                // ignore poll errors, will retry next interval
+              }
+            }, 3000)
+          }
         },
       )
     } catch (e) {
@@ -136,6 +187,34 @@ export function ReviewPanel({ contextId, onClose, onFileClick }: ReviewPanelProp
     setPhase("idle")
     startReview()
   }, [cleanup, startReview])
+
+  const loadHistory = useCallback(async () => {
+    if (!contextId) return
+    setHistoryLoading(true)
+    try {
+      const data = await listReviewRuns(contextId)
+      setHistoryRuns(data.runs)
+      setShowHistory(true)
+    } catch {
+      // ignore
+    } finally {
+      setHistoryLoading(false)
+    }
+  }, [contextId])
+
+  const viewHistoricalResult = useCallback(async (historyRunId: string) => {
+    try {
+      const status = await getReviewRun(historyRunId)
+      if (status.final_result) {
+        setFinalResult(status.final_result)
+        setRunId(historyRunId)
+        setPhase("completed")
+        setShowHistory(false)
+      }
+    } catch {
+      // ignore
+    }
+  }, [])
 
   const isRunning = phase === "running"
   const isTerminal = phase === "completed" || phase === "failed" || phase === "cancelled"
@@ -173,6 +252,16 @@ export function ReviewPanel({ contextId, onClose, onFileClick }: ReviewPanelProp
           <Button
             variant="ghost"
             size="icon"
+            onClick={showHistory ? () => setShowHistory(false) : loadHistory}
+            disabled={historyLoading}
+            className="h-7 w-7"
+            title="历史审查"
+          >
+            <History className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
             onClick={() => {
               cleanup()
               onClose()
@@ -184,7 +273,57 @@ export function ReviewPanel({ contextId, onClose, onFileClick }: ReviewPanelProp
         </div>
       </div>
 
-      {phase === "idle" && (
+      {showHistory && (
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+          <div className="border-b px-3 py-2">
+            <h4 className="text-xs font-semibold">历史审查记录</h4>
+          </div>
+          {historyRuns.length === 0 ? (
+            <div className="flex flex-1 items-center justify-center px-3 py-4 text-xs text-muted-foreground">
+              暂无历史审查记录
+            </div>
+          ) : (
+            <div className="divide-y">
+              {historyRuns.map((run) => (
+                <button
+                  key={run.run_id}
+                  className="flex w-full flex-col gap-1 px-3 py-2.5 text-left hover:bg-muted/50 transition-colors"
+                  onClick={() => viewHistoricalResult(run.run_id)}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-mono text-muted-foreground truncate">
+                      {run.run_id}
+                    </span>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
+                      run.lifecycle === "completed"
+                        ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+                        : run.lifecycle === "failed"
+                          ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
+                          : "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400"
+                    }`}>
+                      {run.lifecycle === "completed" ? "已完成" : run.lifecycle === "failed" ? "失败" : run.lifecycle === "cancelled" ? "已取消" : run.lifecycle}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                    <span>{new Date(run.created_at).toLocaleString("zh-CN")}</span>
+                    {run.finding_count > 0 && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span>{run.finding_count} 个发现</span>
+                      </>
+                    )}
+                  </div>
+                  {run.summary && (
+                    <p className="text-[11px] text-muted-foreground line-clamp-2">{run.summary}</p>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {phase === "idle" && !showHistory && (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
           <div className="rounded-full bg-muted p-3">
             <Play className="h-6 w-6 text-muted-foreground" />

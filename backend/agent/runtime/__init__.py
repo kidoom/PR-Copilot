@@ -26,7 +26,6 @@ from backend.agent.runtime.events import (
     SUPPORTED_EVENT_TYPES,
 )
 from backend.agent.runtime.run_manager import RunManager, RunNotFoundError
-from backend.agent.runtime.main_runner import run_main_agent
 
 __all__ = [
     "AgentDefinition",
@@ -61,6 +60,5 @@ __all__ = [
     "build_subagent_runner",
     "generate_child_session_id",
     "run_loop",
-    "run_main_agent",
     "run_subagent",
 ]

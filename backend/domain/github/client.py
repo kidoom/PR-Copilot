@@ -32,9 +32,42 @@ class GitHubClient:
         if self._cancellation_probe is not None:
             self._cancellation_probe.check()
 
+    async def _send(self, method: str, path: str) -> httpx.Response:
+        try:
+            return await self._client.request(method, path)
+        except httpx.TimeoutException as exc:
+            raise GitHubAPIError(
+                504,
+                "GitHub API request timed out",
+                "timeout",
+            ) from exc
+        except httpx.RequestError as exc:
+            raise GitHubAPIError(
+                502,
+                f"Unable to connect to GitHub API: {exc}",
+                "network",
+            ) from exc
+
+    @staticmethod
+    def _raise_for_status(resp: httpx.Response) -> None:
+        if resp.status_code >= 500:
+            raise GitHubAPIError(
+                502,
+                f"GitHub API returned HTTP {resp.status_code}",
+                "upstream",
+            )
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise GitHubAPIError(
+                502,
+                f"Unexpected GitHub API response: HTTP {resp.status_code}",
+                "upstream",
+            ) from exc
+
     async def _request(self, method: str, path: str) -> dict | list:
         self._check_cancellation()
-        resp = await self._client.request(method, path)
+        resp = await self._send(method, path)
         if resp.status_code == 401:
             raise GitHubAPIError(401, "Unauthorized: token is invalid or expired", "auth")
         if resp.status_code == 403:
@@ -44,7 +77,7 @@ class GitHubClient:
             raise GitHubAPIError(403, f"Forbidden: {resp.text}", "permission")
         if resp.status_code == 404:
             raise GitHubAPIError(404, "PR not found or repository is private", "not_found")
-        resp.raise_for_status()
+        self._raise_for_status(resp)
         return resp.json()
 
     def _parse_next_link(self, link_header: str | None) -> str | None:
@@ -63,7 +96,7 @@ class GitHubClient:
         url = f"{path}?per_page={per_page}"
         while url:
             self._check_cancellation()
-            resp = await self._client.get(url)
+            resp = await self._send("GET", url)
             if resp.status_code == 401:
                 raise GitHubAPIError(401, "Unauthorized: token is invalid or expired", "auth")
             if resp.status_code == 403:
@@ -73,7 +106,7 @@ class GitHubClient:
                 raise GitHubAPIError(403, f"Forbidden: {resp.text}", "permission")
             if resp.status_code == 404:
                 raise GitHubAPIError(404, "PR not found or repository is private", "not_found")
-            resp.raise_for_status()
+            self._raise_for_status(resp)
             data = resp.json()
             if isinstance(data, list):
                 results.extend(data)

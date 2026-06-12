@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,62 @@ from backend.agent.tools.repo_context.provider.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+def _detect_system_proxy() -> str | None:
+    """Detect HTTP proxy from environment variables or Windows system settings."""
+    import socket
+
+    # 1. Explicit env vars (highest priority)
+    for key in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
+        val = os.environ.get(key, "").strip()
+        if val:
+            return val
+
+    # 2. Windows system proxy from registry
+    if os.name == "nt":
+        try:
+            import winreg
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Internet Settings",
+            ) as reg_key:
+                server, _ = winreg.QueryValueEx(reg_key, "ProxyServer")
+                if server and isinstance(server, str) and server.strip():
+                    proxy_url = f"http://{server.strip()}"
+                    # Verify the proxy port is actually reachable
+                    host, _, port = server.strip().partition(":")
+                    try:
+                        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        sock.settimeout(1)
+                        sock.connect((host, int(port)))
+                        sock.close()
+                        return proxy_url
+                    except (OSError, ValueError):
+                        pass
+        except (OSError, ImportError, ValueError):
+            pass
+
+    return None
+
+
+_GIT_NETWORK_ERROR_MARKERS = (
+    "connection was reset",
+    "connection reset",
+    "recv failure",
+    "failed to connect",
+    "could not resolve host",
+    "connection timed out",
+    "operation timed out",
+    "network is unreachable",
+    "network unavailable",
+    "early eof",
+    "remote end hung up unexpectedly",
+    "tls",
+    "ssl",
+    "schannel",
+    "http/2 stream",
+)
+_GIT_RETRY_DELAYS_SECONDS = (0.25, 0.75)
 
 
 def _run_git(
@@ -41,6 +98,45 @@ def _run_git(
         timeout=timeout,
         env=base_env,
     )
+
+
+def _git_failure(operation: str, result: subprocess.CompletedProcess[str]) -> str:
+    detail = result.stderr.strip() or result.stdout.strip() or "Git produced no output"
+    return f"{operation} failed (exit {result.returncode}): {detail}"
+
+
+def _is_retryable_git_failure(result: subprocess.CompletedProcess[str]) -> bool:
+    if result.returncode == 0:
+        return False
+    output = f"{result.stderr}\n{result.stdout}".lower()
+    return any(marker in output for marker in _GIT_NETWORK_ERROR_MARKERS)
+
+
+def _run_git_with_network_retry(
+    args: list[str],
+    *,
+    cwd: str,
+    operation: str,
+    env: dict[str, str] | None = None,
+    timeout: int = 60,
+    cleanup_before_retry: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    result = _run_git(args, cwd=cwd, env=env, timeout=timeout)
+    for attempt, delay in enumerate(_GIT_RETRY_DELAYS_SECONDS, start=2):
+        if not _is_retryable_git_failure(result):
+            break
+        logger.warning(
+            "%s hit a transient Git network error; retrying attempt %d/%d in %.2fs",
+            operation,
+            attempt,
+            len(_GIT_RETRY_DELAYS_SECONDS) + 1,
+            delay,
+        )
+        if cleanup_before_retry:
+            _cleanup_dir(cleanup_before_retry)
+        time.sleep(delay)
+        result = _run_git(args, cwd=cwd, env=env, timeout=timeout)
+    return result
 
 
 def _verify_local_identity(
@@ -88,11 +184,18 @@ def _cleanup_askpass(askpass_dir: str) -> None:
 
 
 def _sanitize_dir_name(name: str) -> str:
-    """Remove characters that are invalid in Windows directory names."""
+    """Remove characters that are invalid in Windows directory names.
+
+    Windows forbids: < > : " / \\ | ? *
+    Also strips control characters (0x00-0x1F) and characters above U+FFFF
+    that can cause issues with some filesystem drivers.
+    """
     # Windows forbidden: < > : " / \ | ? *
     invalid = '<>:"/\\|?*'
     for ch in invalid:
         name = name.replace(ch, "_")
+    # Strip control characters (0x00-0x1F) and DEL (0x7F)
+    name = "".join(ch for ch in name if ord(ch) >= 32 and ord(ch) != 127)
     # Strip trailing dots/spaces (Windows silently strips them, causing confusion)
     name = name.rstrip(". ")
     return name or "repo"
@@ -103,6 +206,7 @@ def _prepare_temp_clone(
     temp_root: str,
     token: str | None = None,
 ) -> tuple[str | None, str | None]:
+    temp_root = os.path.abspath(temp_root)
     os.makedirs(temp_root, exist_ok=True)
     # Sanitize each component and keep the name short to avoid MAX_PATH issues on Windows
     owner = _sanitize_dir_name(identity.owner)[:40]
@@ -110,38 +214,57 @@ def _prepare_temp_clone(
     dir_name = f"{owner}__{repo}__{identity.head_sha[:8]}__{uuid.uuid4().hex[:6]}"
     clone_dir = os.path.join(temp_root, dir_name)
 
+    # Guard: ensure the clone directory path is valid before proceeding
+    if len(clone_dir) > 240:
+        return None, f"Clone path too long ({len(clone_dir)} chars): {clone_dir[:100]}..."
+
     askpass_dir: str | None = None
     try:
-        env: dict[str, str] | None = None
+        env: dict[str, str] = {
+            "GIT_TERMINAL_PROMPT": "0",
+            # Keep workspace preparation independent from stale machine-level
+            # credential helpers. Private repositories use the explicit token.
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "credential.helper",
+            "GIT_CONFIG_VALUE_0": "",
+        }
+        # Forward proxy settings so git can reach GitHub through corporate/personal proxies
+        proxy = _detect_system_proxy()
+        if proxy:
+            env.setdefault("HTTP_PROXY", proxy)
+            env.setdefault("HTTPS_PROXY", proxy)
+            env.setdefault("http_proxy", proxy)
+            env.setdefault("https_proxy", proxy)
         if token:
             askpass_dir, askpass_script = _create_askpass_script(token)
-            env = {
-                "GIT_ASKPASS": askpass_script,
-                "GIT_TERMINAL_PROMPT": "0",
-            }
+            env["GIT_ASKPASS"] = askpass_script
 
         clone_url = f"https://github.com/{identity.owner}/{identity.repo}.git"
-        result = _run_git(
+        logger.info("Cloning %s into %s", clone_url, clone_dir)
+        result = _run_git_with_network_retry(
             ["clone", "--depth=1", "--no-checkout", clone_url, clone_dir],
             cwd=temp_root,
+            operation="Clone",
             env=env,
             timeout=120,
+            cleanup_before_retry=clone_dir,
         )
         if result.returncode != 0:
             _cleanup_dir(clone_dir)
-            return None, f"Clone failed: {result.stderr.strip()}"
+            return None, _git_failure("Clone", result)
 
         if identity.pull_number is not None:
             ref = f"refs/pull/{identity.pull_number}/head"
-            result = _run_git(
+            result = _run_git_with_network_retry(
                 ["fetch", "origin", ref],
                 cwd=clone_dir,
+                operation="Fetch PR ref",
                 env=env,
                 timeout=60,
             )
             if result.returncode != 0:
                 _cleanup_dir(clone_dir)
-                return None, f"Fetch PR ref failed: {result.stderr.strip()}"
+                return None, _git_failure("Fetch PR ref", result)
 
         result = _run_git(
             ["checkout", identity.head_sha],
@@ -150,13 +273,13 @@ def _prepare_temp_clone(
         )
         if result.returncode != 0:
             _cleanup_dir(clone_dir)
-            return None, f"Checkout failed: {result.stderr.strip()}"
+            return None, _git_failure("Checkout", result)
 
         return clone_dir, None
 
     except (OSError, subprocess.TimeoutExpired) as e:
         _cleanup_dir(clone_dir)
-        return None, f"Git operation failed: {e}"
+        return None, f"Git operation failed for '{clone_dir}': {e}"
     finally:
         if askpass_dir:
             _cleanup_askpass(askpass_dir)
@@ -172,7 +295,7 @@ def _cleanup_dir(path: str) -> None:
 
 class RepoWorkspaceManager:
     def __init__(self, temp_root: str | None = None) -> None:
-        self._temp_root = temp_root
+        self._temp_root = os.path.abspath(temp_root) if temp_root else None
         self._workspaces: dict[tuple[str, str], RepoWorkspace] = {}
 
     def prepare_workspace(

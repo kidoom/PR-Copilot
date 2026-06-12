@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from typing import Any, Callable, Awaitable
 
 from backend.agent.runtime.accounting import OperationUsage, RunUsage, RuntimeFailureReason
@@ -173,8 +174,15 @@ class TaskTool:
         results: list[dict[str, Any] | None] = [None] * len(tasks)
         semaphore = asyncio.Semaphore(self._max_concurrent_tasks)
 
+        # Stagger delay between subagent starts (seconds). Set to 0 to disable.
+        _stagger_delay = float(os.environ.get("PR_COPILOT_SUBAGENT_STAGGER_DELAY", "0"))
+
         async def _dispatch_one(index: int, raw_task: dict[str, Any]) -> None:
             async with semaphore:
+                # Stagger subagent starts to avoid API rate limiting
+                if _stagger_delay > 0 and index > 0:
+                    await asyncio.sleep(min(index * _stagger_delay, 5.0))
+
                 route = _resolve_route(raw_task, route_index)
                 effective_agent_type = (
                     raw_task.get("agent_type")

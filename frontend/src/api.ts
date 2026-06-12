@@ -202,6 +202,53 @@ export async function cancelReviewRun(
   return res.json()
 }
 
+export interface ReviewHistoryRun {
+  run_id: string
+  lifecycle: string
+  created_at: string
+  completed_at?: string
+  finding_count: number
+  summary?: string
+  status?: string
+}
+
+export async function listReviewRuns(
+  contextId: string,
+): Promise<{ runs: ReviewHistoryRun[] }> {
+  const res = await fetch(
+    apiUrl(`/api/pr/context/${encodeURIComponent(contextId)}/runs`),
+  )
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ detail: "Unknown error" }))
+    throw new Error(body.detail || `Request failed: ${res.status}`)
+  }
+  return res.json()
+}
+
+export interface PrSessionSummary {
+  pr_session_id: string
+  owner: string
+  repo: string
+  pull_number: number
+  updated_at: string
+  run_count: number
+  latest_run_id?: string
+  latest_lifecycle?: string
+  latest_completed_at?: string
+  latest_finding_count?: number
+  latest_summary?: string
+  latest_status?: string
+}
+
+export async function listAllSessions(): Promise<{ sessions: PrSessionSummary[] }> {
+  const res = await fetch(apiUrl("/api/pr/sessions"))
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ detail: "Unknown error" }))
+    throw new Error(body.detail || `Request failed: ${res.status}`)
+  }
+  return res.json()
+}
+
 const TERMINAL_EVENTS = new Set([
   "run.completed",
   "run.failed",

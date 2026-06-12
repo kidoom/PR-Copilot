@@ -10,6 +10,7 @@ from backend.api.routes.pr_context import router as pr_context_router
 from backend.api.routes.review import router as review_pipeline_router
 from backend.api.routes.review_runs import router as review_runs_router
 from backend.api.routes.review_ws import router as review_ws_router
+from backend.api.routes.inspection import router as inspection_router
 from backend.deps import preload_agent_deps
 
 app = FastAPI(title="PR Copilot", version="0.1.0")
@@ -45,11 +46,32 @@ app.include_router(pr_context_router)
 app.include_router(review_pipeline_router)
 app.include_router(review_runs_router)
 app.include_router(review_ws_router)
+app.include_router(inspection_router)
 
 
 @app.on_event("startup")
 async def startup() -> None:
-    preload_agent_deps()
+    import logging
+
+    from backend.api.routes.review_runs import get_run_manager
+    from backend.storage.pr_session.recovery import recover_on_startup
+
+    deps = preload_agent_deps()
+
+    # Recover persisted PR sessions and runs
+    logger = logging.getLogger(__name__)
+    try:
+        report = recover_on_startup(deps.pr_session_store, get_run_manager())
+        logger.info(
+            "Startup recovery: %d PR sessions, %d runs scanned, "
+            "%d terminal restored, %d interrupted",
+            report.pr_sessions_scanned,
+            report.runs_scanned,
+            report.terminal_runs_restored,
+            report.interrupted_runs,
+        )
+    except Exception:
+        logger.warning("Startup recovery failed", exc_info=True)
 
 
 @app.get("/api/health")

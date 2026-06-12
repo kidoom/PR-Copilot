@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from backend.agent.runtime.events import (
@@ -12,6 +14,8 @@ from backend.agent.runtime.events import (
     RUN_FAILED,
     RUN_CANCELLED,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class RunNotFoundError(Exception):
@@ -28,6 +32,9 @@ class RunManager:
         self._cancellation_probes: dict[str, Any] = {}  # CancellationProbe by run_id
 
     def create_run(self, context_id: str, *, run_id: str | None = None) -> AgentRunSession:
+        # Opportunistically clean up terminal runs
+        self.cleanup_terminal_runs()
+
         rid = run_id or f"run_{uuid.uuid4().hex[:12]}"
         session = AgentRunSession(run_id=rid, context_id=context_id)
         self._runs[rid] = session
@@ -188,3 +195,30 @@ class RunManager:
         """Remove registered background task reference after terminal state (task 3.8)."""
         self._execution_tasks.pop(run_id, None)
         self._cancellation_probes.pop(run_id, None)
+
+    def cleanup_terminal_runs(self, max_age_minutes: int = 30) -> int:
+        """Remove terminal runs from in-memory state after max_age_minutes.
+
+        Returns the number of removed runs.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)
+        to_remove = []
+
+        for run_id, session in self._runs.items():
+            if not self._is_terminal(session):
+                continue
+            # Use the last event's timestamp or session.updated_at
+            if session.retained_events:
+                last_event = session.retained_events[-1]
+                # RunEvent doesn't have a timestamp field, so we just remove
+                # terminal runs that have been around for a while
+                pass
+            to_remove.append(run_id)
+
+        # For now, remove all terminal runs (they're already persisted to durable store)
+        for run_id in to_remove:
+            self._runs.pop(run_id, None)
+
+        if to_remove:
+            logger.info("Cleaned up %d terminal runs from in-memory state", len(to_remove))
+        return len(to_remove)

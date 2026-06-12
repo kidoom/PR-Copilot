@@ -80,3 +80,30 @@ def test_create_context_returns_auth_guidance_for_private_repo(monkeypatch):
 
     assert response.status_code == 404
     assert "PR not found" in response.json()["detail"]
+
+
+def test_create_context_returns_network_guidance(monkeypatch):
+    class UnreachableGitHubClient(FakeGitHubClient):
+        async def get_pr(self, owner, repo, pull_number):
+            raise GitHubAPIError(
+                502,
+                "Unable to connect to GitHub API: TLS handshake failed",
+                "network",
+            )
+
+    monkeypatch.setattr(
+        pr_context,
+        "resolve_github_token",
+        lambda: ResolvedCredential(token="", source=CredentialSource.ANONYMOUS),
+    )
+    monkeypatch.setattr(pr_context, "GitHubClient", UnreachableGitHubClient)
+    app = FastAPI()
+    app.include_router(pr_context.router)
+
+    response = TestClient(app).post(
+        "/api/pr/context",
+        json={"pr_url": "https://github.com/owner/repo/pull/1"},
+    )
+
+    assert response.status_code == 502
+    assert "无法连接 GitHub API" in response.json()["detail"]

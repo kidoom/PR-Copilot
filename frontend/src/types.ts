@@ -125,6 +125,7 @@ export interface NormalizedFinding {
   severity: "informational" | "info" | "low" | "medium" | "high" | "critical"
   evidence: EvidenceRef[]
   fingerprint: string
+  suggestion?: string
 }
 
 export interface TaskSummary {

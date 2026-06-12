@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import traceback
 from typing import Any, Callable
+
+logger = logging.getLogger(__name__)
 
 from backend.agent.model.messages import Message, MAX_VISIBLE_DELTA_CHARS, truncate_delta
 from backend.agent.runtime.cancellation import CancellationProbe, Cancelled
@@ -29,6 +32,13 @@ from backend.agent.runtime.memory.store import FileMemoryStore
 from backend.agent.runtime.run_manager import RunManager
 from backend.agent.tools.registry import ToolRegistry
 from backend.deps import AgentDeps
+from backend.storage.pr_session.models import AgentSessionRef, AgentSessionsRecord, AgentSessionStatus
+from backend.storage.pr_session.run_persistence import (
+    persist_agent_sessions,
+    persist_event,
+    persist_lifecycle_transition,
+    persist_result,
+)
 
 
 def _summarize_value(value: Any, *, max_chars: int = 500) -> Any:
@@ -78,6 +88,28 @@ def _message_to_payload(msg: Message) -> dict[str, Any]:
     }
 
 
+def _update_agent_session_status(
+    store: Any,
+    run_id: str,
+    memory_session_id: str,
+    status: AgentSessionStatus,
+) -> None:
+    """Update the status of an agent session reference in the durable store."""
+    try:
+        record = store.load_agent_sessions(run_id)
+        if record is None:
+            return
+        for ref in record.sessions:
+            if ref.memory_session_id == memory_session_id:
+                ref.status = status
+                from datetime import datetime, timezone
+                ref.completed_at = datetime.now(timezone.utc).isoformat()
+                break
+        store.save_agent_sessions(record)
+    except Exception:
+        pass  # Best-effort; don't fail the run
+
+
 async def run_main_agent(
     *,
     run_id: str,
@@ -94,8 +126,13 @@ async def run_main_agent(
     pr_identity: Any = None,
     token: str | None = None,
 ) -> dict[str, Any]:
+    # Persistence: get the PR session store from deps
+    pr_store = deps.pr_session_store
+
     def _emit(event_type: str, payload: dict[str, Any] | None = None) -> RunEvent:
         event = run_manager.publish_event(run_id, event_type, payload)
+        # Persist event to durable storage
+        persist_event(pr_store, event)
         if event_sink is not None:
             event_sink(event)
         return event
@@ -120,12 +157,29 @@ async def run_main_agent(
     )
     memory_store.create_session(main_session)
 
+    # Register main-agent memory session with durable run
+    ps_id = pr_store.resolve_run_to_pr_session(run_id)
+    if ps_id:
+        agent_sessions_record = AgentSessionsRecord(
+            run_id=run_id,
+            sessions=[
+                AgentSessionRef(
+                    memory_session_id=session_id,
+                    agent_kind="main",
+                    agent_type="main-agent",
+                    status=AgentSessionStatus.ACTIVE,
+                ),
+            ],
+        )
+        persist_agent_sessions(pr_store, run_id, agent_sessions_record)
+
     # Bail out early if run was already cancelled before we started
     session = run_manager.get_run(run_id)
     if session.status in (RunStatus.CANCELLED, RunStatus.COMPLETED, RunStatus.FAILED):
         return {"error": f"Run already in terminal state: {session.status.value}"}
 
     run_manager.mark_running(run_id)
+    persist_lifecycle_transition(pr_store, run_id, RunStatus.RUNNING)
     _emit(RUN_STARTED, {"context_id": context_id})
 
     # Create cancellation probe for this run (task 4.1)
@@ -238,16 +292,32 @@ async def run_main_agent(
             )
         except (Cancelled, asyncio.CancelledError):
             raise
-        except Exception:
+        except Exception as exc:
             if not task_results:
                 raise
+            logger.error(
+                "Run %s synthesis failed: %s — falling back to partial results",
+                run_id,
+                exc,
+                exc_info=True,
+            )
             fallback = build_fallback_result(task_results=task_results)
-            fallback.summary = "Review completed with partial results; final synthesis unavailable."
+            fallback.summary = "审查完成，但最终综合分析失败，仅展示子任务结果。"
             fallback.uncertainties.append(
-                "Final synthesis was unavailable. Review findings include only validated subagent results."
+                f"最终综合分析失败: {type(exc).__name__}: {exc}. 仅展示子任务结果。"
             )
             output_payload = fallback.to_dict()
             run_manager.complete_run(run_id, result=output_payload)
+            persist_lifecycle_transition(pr_store, run_id, RunStatus.COMPLETED)
+            _update_agent_session_status(pr_store, run_id, session_id, AgentSessionStatus.COMPLETED)
+
+            ps_id = pr_store.resolve_run_to_pr_session(run_id)
+            if ps_id:
+                persist_result(
+                    pr_store, run_id, ps_id, "completed",
+                    findings=output_payload.get("findings", []),
+                )
+
             append_event(memory_store, session_id, {
                 "event_type": RUN_COMPLETED,
                 "output": output_payload,
@@ -291,6 +361,20 @@ async def run_main_agent(
 
         output_payload = final_result.to_dict()
         run_manager.complete_run(run_id, result=output_payload)
+        persist_lifecycle_transition(pr_store, run_id, RunStatus.COMPLETED)
+
+        # Update main-agent session status to completed
+        _update_agent_session_status(pr_store, run_id, session_id, AgentSessionStatus.COMPLETED)
+
+        # Persist terminal result
+        ps_id = pr_store.resolve_run_to_pr_session(run_id)
+        if ps_id:
+            persist_result(
+                pr_store, run_id, ps_id, "completed",
+                findings=output_payload.get("findings", []),
+                coverage=output_payload.get("coverage", {}),
+                usage=output_payload.get("usage", {}),
+            )
 
         # Append completion event to memory
         append_event(memory_store, session_id, {
@@ -303,6 +387,13 @@ async def run_main_agent(
     except (Cancelled, asyncio.CancelledError):
         # Cancellation observed - transition to cancelled (task 4.3)
         run_manager.observe_cancellation(run_id)
+        persist_lifecycle_transition(pr_store, run_id, RunStatus.CANCELLED)
+        _update_agent_session_status(pr_store, run_id, session_id, AgentSessionStatus.CANCELLED)
+
+        ps_id = pr_store.resolve_run_to_pr_session(run_id)
+        if ps_id:
+            persist_result(pr_store, run_id, ps_id, "cancelled")
+
         append_event(memory_store, session_id, {
             "event_type": "run.cancelled",
         })
@@ -312,6 +403,12 @@ async def run_main_agent(
         error_msg = f"{type(exc).__name__}: {exc}"
         tb = traceback.format_exc()
         run_manager.fail_run(run_id, error=error_msg)
+        persist_lifecycle_transition(pr_store, run_id, RunStatus.FAILED, error_summary=error_msg)
+        _update_agent_session_status(pr_store, run_id, session_id, AgentSessionStatus.FAILED)
+
+        ps_id = pr_store.resolve_run_to_pr_session(run_id)
+        if ps_id:
+            persist_result(pr_store, run_id, ps_id, "failed", error_summary=error_msg)
 
         # Append failure event to memory
         append_event(memory_store, session_id, {

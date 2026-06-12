@@ -24,6 +24,7 @@ import {
   Layers,
   X,
   Bot,
+  History,
 } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
@@ -49,12 +50,16 @@ import {
   analyzePr,
   getIntakeSummary,
   getFilePatch,
+  getReviewRun,
+  listAllSessions,
 } from "@/api"
+import type { PrSessionSummary } from "@/api"
 import type {
   PrContextResponse,
   FileEntry,
   IntakeSummary,
   FilePatchResponse,
+  FinalReviewResult,
 } from "@/types"
 import { ReviewPanel } from "@/components/ReviewPanel"
 
@@ -118,7 +123,13 @@ function getErrorGuidance(error: string): string {
   return "请检查 PR 链接并确保仓库可访问。"
 }
 
-function EmptyState() {
+function EmptyState({
+  sessions,
+  onSessionClick,
+}: {
+  sessions: PrSessionSummary[]
+  onSessionClick: (session: PrSessionSummary) => void
+}) {
   return (
     <div className="space-y-8">
       <div className="flex flex-col items-center justify-center py-12 text-center">
@@ -134,6 +145,58 @@ function EmptyState() {
           <span>示例: https://github.com/owner/repo/pull/123</span>
         </div>
       </div>
+
+      {sessions.length > 0 && (
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex items-center gap-2">
+              <History className="h-4 w-4" />
+              <CardTitle className="text-sm font-medium">历史审查记录</CardTitle>
+            </div>
+            <CardDescription>点击可查看之前的审查结果</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="divide-y">
+              {sessions.map((s) => (
+                <button
+                  key={s.pr_session_id}
+                  className="flex w-full items-start gap-3 py-2.5 text-left hover:bg-muted/50 transition-colors rounded px-2 -mx-2"
+                  onClick={() => onSessionClick(s)}
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate text-sm font-medium">
+                        {s.owner}/{s.repo}#{s.pull_number}
+                      </span>
+                      {s.latest_lifecycle && (
+                        <span className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded-full ${
+                          s.latest_lifecycle === "completed"
+                            ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+                            : s.latest_lifecycle === "failed"
+                              ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
+                              : "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400"
+                        }`}>
+                          {s.latest_lifecycle === "completed" ? "已完成" : s.latest_lifecycle === "failed" ? "失败" : s.latest_lifecycle === "cancelled" ? "已取消" : s.latest_lifecycle}
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
+                      <span>{new Date(s.updated_at).toLocaleString("zh-CN")}</span>
+                      <span>{s.run_count} 次审查</span>
+                      {s.latest_finding_count != null && s.latest_finding_count > 0 && (
+                        <span>{s.latest_finding_count} 个发现</span>
+                      )}
+                    </div>
+                    {s.latest_summary && (
+                      <p className="mt-0.5 text-[11px] text-muted-foreground line-clamp-1">{s.latest_summary}</p>
+                    )}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid gap-4 md:grid-cols-3">
         <Card className="border-dashed">
@@ -801,6 +864,8 @@ function App() {
   const [result, setResult] = useState<PrContextResponse | null>(null)
   const [intake, setIntake] = useState<IntakeSummary | null>(null)
   const [showReviewPanel, setShowReviewPanel] = useState(false)
+  const [sessions, setSessions] = useState<PrSessionSummary[]>([])
+  const [historicalResult, setHistoricalResult] = useState<FinalReviewResult | null>(null)
 
   // Sidebar state
   const [selectedFile, setSelectedFile] = useState<FileEntry | null>(null)
@@ -808,6 +873,38 @@ function App() {
   const [patchData, setPatchData] = useState<FilePatchResponse | null>(null)
   const [patchError, setPatchError] = useState<string | null>(null)
   const patchRequestId = useRef(0)
+
+  // Load global session history on mount
+  useEffect(() => {
+    listAllSessions()
+      .then((data) => setSessions(data.sessions))
+      .catch(() => {})
+  }, [])
+
+  const handleSessionClick = useCallback(
+    async (session: PrSessionSummary) => {
+      // Load historical result directly
+      if (session.latest_run_id && session.latest_lifecycle === "completed") {
+        try {
+          const status = await getReviewRun(session.latest_run_id)
+          if (status.final_result) {
+            setHistoricalResult(status.final_result)
+            setShowReviewPanel(true)
+            // Also set the PR URL for context
+            const url = `https://github.com/${session.owner}/${session.repo}/pull/${session.pull_number}`
+            setPrUrl(url)
+            return
+          }
+        } catch {
+          // fall through to URL fill
+        }
+      }
+      // Fallback: just fill the PR URL
+      const url = `https://github.com/${session.owner}/${session.repo}/pull/${session.pull_number}`
+      setPrUrl(url)
+    },
+    [],
+  )
 
   // Lock body scroll when sidebar is open on mobile
   useEffect(() => {
@@ -866,6 +963,7 @@ function App() {
     setError(null)
     setResult(null)
     setIntake(null)
+    setHistoricalResult(null)
     closeSidebar()
     try {
       const data = await analyzePr(prUrl)
@@ -962,20 +1060,28 @@ function App() {
                 </AlertDescription>
               </Alert>
             )}
-            {contentState === "empty" && <EmptyState />}
+            {contentState === "empty" && <EmptyState sessions={sessions} onSessionClick={handleSessionClick} />}
             {contentState === "result" && result && (
               <ResultDashboard result={result} intake={intake} onFileClick={handleFileClick} />
             )}
           </div>
-          {showReviewPanel && result && (
+          {showReviewPanel && result && !historicalResult && (
             <div className="sticky top-20 h-[calc(100vh-6.5rem)] w-[40%] shrink-0 self-start overflow-hidden">
               <ReviewPanel
                 contextId={result.context_id}
-                onClose={() => setShowReviewPanel(false)}
+                onClose={() => { setShowReviewPanel(false); setHistoricalResult(null) }}
                 onFileClick={(filename) => {
                   const file = result.files.find((f) => f.filename === filename)
                   if (file) handleFileClick(file)
                 }}
+              />
+            </div>
+          )}
+          {showReviewPanel && historicalResult && (
+            <div className="sticky top-20 h-[calc(100vh-6.5rem)] w-[40%] shrink-0 self-start overflow-hidden">
+              <ReviewPanel
+                onClose={() => { setShowReviewPanel(false); setHistoricalResult(null) }}
+                initialResult={historicalResult}
               />
             </div>
           )}

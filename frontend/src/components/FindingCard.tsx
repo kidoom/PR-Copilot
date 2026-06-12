@@ -1,5 +1,6 @@
 import { useState } from "react"
 import { ChevronDown, ChevronRight, ExternalLink } from "lucide-react"
+import Markdown from "react-markdown"
 import { Badge } from "@/components/ui/badge"
 import type { NormalizedFinding, EvidenceRef } from "@/types"
 
@@ -78,7 +79,15 @@ export function FindingCard({
               {Math.round(finding.confidence * 100)}% 置信度
             </span>
           </div>
-          <p className="mt-1 break-words text-sm font-medium">{finding.claim}</p>
+          <div className="mt-1 text-sm font-medium [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-xs [&_code]:font-mono [&_p]:my-1 [&_ul]:my-1 [&_ul]:pl-4 [&_ol]:my-1 [&_ol]:pl-4">
+            <Markdown>{finding.claim}</Markdown>
+          </div>
+          {finding.suggestion && (
+            <div className="mt-2 rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs text-blue-800 dark:border-blue-800/50 dark:bg-blue-950/30 dark:text-blue-300 [&_code]:rounded [&_code]:bg-blue-100 [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-[11px] [&_code]:font-mono [&_p]:my-0.5">
+              <span className="font-semibold">💡 建议：</span>
+              <Markdown>{finding.suggestion}</Markdown>
+            </div>
+          )}
           {finding.evidence.length > 0 && (
             <button
               className="mt-1 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"

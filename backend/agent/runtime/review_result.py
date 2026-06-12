@@ -47,14 +47,18 @@ class Finding:
     confidence: float = 0.5
     severity: str = "medium"  # low, medium, high, critical
     evidence: list[EvidenceRef] = field(default_factory=list)
+    suggestion: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "claim": self.claim,
             "confidence": self.confidence,
             "severity": self.severity,
             "evidence": [e.to_dict() for e in self.evidence],
         }
+        if self.suggestion:
+            result["suggestion"] = self.suggestion
+        return result
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Finding:
@@ -63,6 +67,7 @@ class Finding:
             confidence=data.get("confidence", 0.5),
             severity=data.get("severity", "medium"),
             evidence=[EvidenceRef.from_dict(e) for e in data.get("evidence", [])],
+            suggestion=data.get("suggestion", ""),
         )
 
 

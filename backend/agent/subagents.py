@@ -42,12 +42,13 @@ final result as a plain JSON object (NOT in a code block, just raw JSON).
 OUTPUT FORMAT - Your final assistant message must be ONLY this JSON:
 {
   "status": "success",
-  "summary": "Brief summary of your findings",
+  "summary": "用中文简要总结你的发现",
   "findings": [
     {
-      "claim": "What you found",
+      "claim": "用中文描述问题，必须具体到文件名和行号，说明发生了什么、为什么有问题。例如：\"backend/api/routes/auth.py 第42行的 token 验证逻辑在 token 过期时没有返回 401，而是返回了 500，会导致客户端无法区分认证失败和服务器错误\"",
       "confidence": 0.8,
       "severity": "medium",
+      "suggestion": "用中文给出具体的修复建议，说明应该怎么改。例如：\"在 token 过期检查处添加专门的异常处理，返回 HTTP 401 状态码并附带 token_expired 错误码，让客户端可以提示用户重新登录\"",
       "evidence": [
         {
           "file": "path/to/file.py",
@@ -61,6 +62,13 @@ OUTPUT FORMAT - Your final assistant message must be ONLY this JSON:
   "uncertainties": [],
   "notes": []
 }
+
+FINDING QUALITY RULES:
+- claim 必须用中文写，必须包含：具体文件路径、具体行号、问题是什么、为什么有问题
+- claim 不要写抽象的描述（如"可能存在竞态条件"），要写具体的场景（如"当两个请求同时调用 update_user 时，因为没有加锁，后写的会覆盖先写的"）
+- suggestion 必须用中文写，要给出具体的修复方向，不要只说"需要修复"
+- severity 判断标准：critical=会导致数据丢失或安全漏洞, high=会导致功能异常, medium=潜在问题或代码质量, low=建议改进
+- 如果某个 finding 没有明确的证据支持，不要输出它
 
 CRITICAL RULES:
 - Do NOT call more than 6 search tools total.

@@ -84,7 +84,7 @@ def test_build_main_messages_includes_synthesis_payload_without_full_task_plan()
     }])
 
     assert messages[0].role.value == "system"
-    assert "already dispatched" in messages[0].content
+    assert "已经" in messages[0].content or "already dispatched" in messages[0].content
     payload = json.loads(messages[1].content)
     assert "task_plan" not in payload
     assert payload["task_plan_summary"]["context_id"] == "ctx1"

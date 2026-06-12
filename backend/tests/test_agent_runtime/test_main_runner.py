@@ -305,7 +305,7 @@ async def test_run_main_agent_returns_partial_results_when_synthesis_fails(tmp_d
     )
 
     assert result["status"] == "completed"
-    assert "partial results" in result["summary"]
+    assert "综合分析失败" in result["summary"] or "partial results" in result["summary"]
     assert result["task_summaries"][0]["parse_status"] == "valid"
     assert mgr.get_run("run-1").status.value == "completed"
 

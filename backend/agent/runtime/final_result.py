@@ -146,6 +146,7 @@ class NormalizedFinding:
     fingerprint: str = ""
     candidate_id: str = ""
     category: str = ""
+    suggestion: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         result = {
@@ -159,6 +160,8 @@ class NormalizedFinding:
             result["candidate_id"] = self.candidate_id
         if self.category:
             result["category"] = self.category
+        if self.suggestion:
+            result["suggestion"] = self.suggestion
         return result
 
 
@@ -311,6 +314,7 @@ def _promote_findings_from_task(
                 confidence=confidence,
                 severity=severity,
                 evidence=evidence_normalized,
+                suggestion=f.get("suggestion", ""),
                 fingerprint=fp,
                 candidate_id=cand_id,
                 category=category,
@@ -337,11 +341,18 @@ def _deduplicate_findings(findings: list[NormalizedFinding]) -> list[NormalizedF
 
 def _merge_unique(items: list[str], new_items: list[str], max_items: int = 50) -> list[str]:
     """Merge bounded unique items (task 5.6)."""
-    seen = set(items)
+    # Normalize: convert any non-string items to strings
+    normalized_items = [str(i) if not isinstance(i, str) else i for i in items]
+    items.clear()
+    items.extend(normalized_items)
+
+    seen: set[str] = set(items)
     for item in new_items:
-        if item and item not in seen and len(items) < max_items:
-            items.append(item)
-            seen.add(item)
+        # Normalize item to string
+        str_item = str(item) if not isinstance(item, str) else item
+        if str_item and str_item not in seen and len(items) < max_items:
+            items.append(str_item)
+            seen.add(str_item)
     return items
 
 
