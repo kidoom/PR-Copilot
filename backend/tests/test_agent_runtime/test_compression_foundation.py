@@ -261,7 +261,10 @@ class TestCompressionConfig:
     def test_default_config(self):
         config = CompressionConfig.default()
         assert config.context_compression_enabled is True
-        assert config.context_window_tokens == 128000
+        assert config.context_window_tokens == 128_000
+        assert config.auto_compact_buffer_tokens == 8000
+        assert config.micro_compact_recent_results == 10
+        assert config.micro_compact_min_chars == 8000
 
     def test_disabled_config(self):
         config = CompressionConfig.disabled()
@@ -269,8 +272,8 @@ class TestCompressionConfig:
 
     def test_auto_compact_threshold(self):
         config = CompressionConfig.default()
-        # 128000 - 4000 - 8000 = 116000
-        assert config.auto_compact_threshold == 116000
+        # 128_000 - 4_000 - 8_000 = 116_000
+        assert config.auto_compact_threshold == 116_000
 
     def test_custom_config(self):
         config = CompressionConfig(

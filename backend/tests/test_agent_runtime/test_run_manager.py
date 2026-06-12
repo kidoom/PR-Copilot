@@ -206,3 +206,199 @@ def test_is_cancelling():
 def test_is_cancelling_unknown_run():
     mgr = RunManager()
     assert not mgr.is_cancelling("nonexistent")
+
+
+# --- Task 3.9: RunManager tests for queued, running, repeated, and already-terminal cancellation ---
+
+def test_cancel_queued_run_transitions_directly_to_cancelled():
+    """Cancelling a queued run goes directly to cancelled, not through cancelling."""
+    mgr = RunManager()
+    mgr.create_run("ctx-1", run_id="run-1")
+    assert mgr.get_run("run-1").status == RunStatus.QUEUED
+    mgr.cancel_run("run-1")
+    session = mgr.get_run("run-1")
+    assert session.status == RunStatus.CANCELLED
+    assert session.cancelling is True
+
+
+def test_cancel_running_run_sets_cancelling():
+    """Cancelling an active run sets cancelling flag."""
+    mgr = RunManager()
+    mgr.create_run("ctx-1", run_id="run-1")
+    mgr.mark_running("run-1")
+    mgr.cancel_run("run-1")
+    session = mgr.get_run("run-1")
+    assert session.status == RunStatus.CANCELLING
+    assert session.cancelling is True
+
+
+def test_cancel_run_idempotent_repeated():
+    """Repeated cancellation requests are idempotent."""
+    mgr = RunManager()
+    mgr.create_run("ctx-1", run_id="run-1")
+    mgr.mark_running("run-1")
+    mgr.cancel_run("run-1")
+    mgr.cancel_run("run-1")  # second call
+    session = mgr.get_run("run-1")
+    assert session.status == RunStatus.CANCELLING
+    assert session.cancelling is True
+
+
+def test_cancel_already_cancelled_is_noop():
+    """Cancelling an already-cancelled run is a no-op."""
+    mgr = RunManager()
+    mgr.create_run("ctx-1", run_id="run-1")
+    mgr.mark_running("run-1")
+    mgr.cancel_run("run-1")
+    mgr.observe_cancellation("run-1")
+    assert mgr.get_run("run-1").status == RunStatus.CANCELLED
+    mgr.cancel_run("run-1")  # should be no-op
+    assert mgr.get_run("run-1").status == RunStatus.CANCELLED
+
+
+def test_cancel_completed_run_is_noop_preserves_completed():
+    """Cancelling a completed run preserves completed state."""
+    mgr = RunManager()
+    mgr.create_run("ctx-1", run_id="run-1")
+    mgr.complete_run("run-1", result={"output": "done"})
+    mgr.cancel_run("run-1")
+    assert mgr.get_run("run-1").status == RunStatus.COMPLETED
+
+
+def test_cancel_failed_run_is_noop():
+    """Cancelling a failed run preserves failed state."""
+    mgr = RunManager()
+    mgr.create_run("ctx-1", run_id="run-1")
+    mgr.fail_run("run-1", error="broke")
+    mgr.cancel_run("run-1")
+    assert mgr.get_run("run-1").status == RunStatus.FAILED
+
+
+# --- Task 3.10: Tests proving terminal events are published exactly once ---
+
+def test_cancelled_terminal_event_published_exactly_once():
+    """Only one run.cancelled event is published for a cancellation."""
+    mgr = RunManager()
+    mgr.create_run("ctx-1", run_id="run-1")
+    mgr.mark_running("run-1")
+    mgr.cancel_run("run-1")
+    mgr.observe_cancellation("run-1")
+    terminal = [e for e in mgr.get_retained_events("run-1") if e.type == RUN_CANCELLED]
+    assert len(terminal) == 1
+
+
+def test_queued_cancel_publishes_exactly_one_cancelled_event():
+    """Cancelling a queued run publishes exactly one run.cancelled event."""
+    mgr = RunManager()
+    mgr.create_run("ctx-1", run_id="run-1")
+    mgr.cancel_run("run-1")
+    terminal = [e for e in mgr.get_retained_events("run-1") if e.type == RUN_CANCELLED]
+    assert len(terminal) == 1
+
+
+def test_completed_terminal_event_not_overwritten_by_late_cancel():
+    """Completion event is preserved when cancel arrives after completion."""
+    mgr = RunManager()
+    mgr.create_run("ctx-1", run_id="run-1")
+    mgr.complete_run("run-1", result={"output": "ok"})
+    mgr.cancel_run("run-1")  # should be no-op
+    events = mgr.get_retained_events("run-1")
+    completed = [e for e in events if e.type == RUN_COMPLETED]
+    cancelled = [e for e in events if e.type == RUN_CANCELLED]
+    assert len(completed) == 1
+    assert len(cancelled) == 0
+
+
+def test_failed_terminal_event_not_overwritten_by_late_cancel():
+    """Failure event is preserved when cancel arrives after failure."""
+    mgr = RunManager()
+    mgr.create_run("ctx-1", run_id="run-1")
+    mgr.fail_run("run-1", error="broke")
+    mgr.cancel_run("run-1")  # should be no-op
+    events = mgr.get_retained_events("run-1")
+    failed = [e for e in events if e.type == RUN_FAILED]
+    cancelled = [e for e in events if e.type == RUN_CANCELLED]
+    assert len(failed) == 1
+    assert len(cancelled) == 0
+
+
+def test_complete_run_prevents_overwrite_after_cancel():
+    """complete_run is no-op when run is already cancelled."""
+    mgr = RunManager()
+    mgr.create_run("ctx-1", run_id="run-1")
+    mgr.mark_running("run-1")
+    mgr.cancel_run("run-1")
+    mgr.observe_cancellation("run-1")
+    mgr.complete_run("run-1", result={"output": "late"})  # should be no-op
+    assert mgr.get_run("run-1").status == RunStatus.CANCELLED
+
+
+def test_fail_run_prevents_overwrite_after_cancel():
+    """fail_run is no-op when run is already cancelled."""
+    mgr = RunManager()
+    mgr.create_run("ctx-1", run_id="run-1")
+    mgr.mark_running("run-1")
+    mgr.cancel_run("run-1")
+    mgr.observe_cancellation("run-1")
+    mgr.fail_run("run-1", error="late error")  # should be no-op
+    assert mgr.get_run("run-1").status == RunStatus.CANCELLED
+
+
+# --- Task 3.1: Background execution task registration ---
+
+def test_register_and_get_execution_task():
+    mgr = RunManager()
+    mgr.create_run("ctx-1", run_id="run-1")
+
+    async def _dummy():
+        pass
+
+    task = asyncio.ensure_future(_dummy())
+    mgr.register_execution_task("run-1", task)
+    assert mgr.get_execution_task("run-1") is task
+    task.cancel()
+
+
+def test_get_execution_task_returns_none_when_not_registered():
+    mgr = RunManager()
+    mgr.create_run("ctx-1", run_id="run-1")
+    assert mgr.get_execution_task("run-1") is None
+
+
+def test_execution_task_cleaned_up_on_complete():
+    mgr = RunManager()
+    mgr.create_run("ctx-1", run_id="run-1")
+
+    async def _dummy():
+        pass
+
+    task = asyncio.ensure_future(_dummy())
+    mgr.register_execution_task("run-1", task)
+    mgr.complete_run("run-1")
+    assert mgr.get_execution_task("run-1") is None
+    task.cancel()
+
+
+def test_execution_task_cleaned_up_on_cancel():
+    mgr = RunManager()
+    mgr.create_run("ctx-1", run_id="run-1")
+    mgr.mark_running("run-1")
+
+    async def _dummy():
+        await asyncio.sleep(10)
+
+    task = asyncio.ensure_future(_dummy())
+    mgr.register_execution_task("run-1", task)
+    mgr.cancel_run("run-1")
+    # Task should be cancelled and reference cleaned up after observe
+    mgr.observe_cancellation("run-1")
+    assert mgr.get_execution_task("run-1") is None
+
+
+def test_mark_running_noop_on_terminal():
+    """mark_running is no-op on terminal states."""
+    mgr = RunManager()
+    mgr.create_run("ctx-1", run_id="run-1")
+    mgr.complete_run("run-1")
+    mgr.mark_running("run-1")
+    assert mgr.get_run("run-1").status == RunStatus.COMPLETED

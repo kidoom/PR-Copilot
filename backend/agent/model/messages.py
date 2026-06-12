@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Callable
 
 
 @dataclass(frozen=True)
@@ -44,3 +44,18 @@ class ModelResponse:
     content: str
     tool_use_blocks: list[ToolUseBlock] = field(default_factory=list)
     token_usage: TokenUsage = field(default_factory=TokenUsage)
+
+
+# Maximum characters for a single visible text delta published to the frontend.
+MAX_VISIBLE_DELTA_CHARS = 1000
+
+# Callback type for visible assistant text deltas (task 1.1).
+# Carries only bounded assistant content text, not tool arguments or reasoning.
+TextDeltaCallback = Callable[[str], None]
+
+
+def truncate_delta(text: str, max_chars: int = MAX_VISIBLE_DELTA_CHARS) -> str:
+    """Truncate a text delta to a safe bound before publishing to the frontend."""
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars]

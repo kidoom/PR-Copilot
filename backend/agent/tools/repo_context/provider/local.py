@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import fnmatch
 import os
 from pathlib import Path
@@ -64,6 +65,21 @@ class LocalRepoProvider(RepoProvider):
         end_line: int | None = None,
         max_bytes: int | None = None,
     ) -> FileReadResult:
+        return await asyncio.to_thread(
+            self._read_file,
+            path,
+            start_line,
+            end_line,
+            max_bytes,
+        )
+
+    def _read_file(
+        self,
+        path: str,
+        start_line: int = 1,
+        end_line: int | None = None,
+        max_bytes: int | None = None,
+    ) -> FileReadResult:
         if is_ignored_directory(path):
             return FileReadResult(path=path, error="Path in ignored directory")
         if is_sensitive_file(path):
@@ -107,6 +123,14 @@ class LocalRepoProvider(RepoProvider):
         globs: list[str] | None = None,
         max_results: int = DEFAULT_MAX_SEARCH_RESULTS,
     ) -> SearchResult:
+        return await asyncio.to_thread(self._search_code, query, globs, max_results)
+
+    def _search_code(
+        self,
+        query: str,
+        globs: list[str] | None = None,
+        max_results: int = DEFAULT_MAX_SEARCH_RESULTS,
+    ) -> SearchResult:
         max_results = min(max_results, DEFAULT_MAX_SEARCH_RESULTS)
         query_lower = query.lower()
         matches: list[SearchMatch] = []
@@ -142,6 +166,13 @@ class LocalRepoProvider(RepoProvider):
         globs: list[str] | None = None,
         max_results: int = DEFAULT_MAX_FILE_LIST_RESULTS,
     ) -> FileListResult:
+        return await asyncio.to_thread(self._list_files, globs, max_results)
+
+    def _list_files(
+        self,
+        globs: list[str] | None = None,
+        max_results: int = DEFAULT_MAX_FILE_LIST_RESULTS,
+    ) -> FileListResult:
         entries: list[FileEntry] = []
         root = Path(self._repo_root)
 
@@ -161,6 +192,9 @@ class LocalRepoProvider(RepoProvider):
         return FileListResult(entries=entries, truncated=False)
 
     async def get_manifest(self) -> ManifestResult:
+        return await asyncio.to_thread(self._get_manifest)
+
+    def _get_manifest(self) -> ManifestResult:
         manifests: dict[str, list[ManifestEntry]] = {}
 
         for category, paths in _MANIFEST_FILES.items():

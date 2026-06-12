@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import tempfile
+import time
 
 import pytest
 
@@ -134,6 +136,23 @@ class TestLocalRepoProviderSearchCode:
         result = await provider.search_code("SECRET")
         env_matches = [m for m in result.matches if ".env" in m.file]
         assert len(env_matches) == 0
+
+    @pytest.mark.asyncio
+    async def test_search_does_not_block_event_loop(self, temp_repo, monkeypatch):
+        provider = LocalRepoProvider(temp_repo)
+        original_search = provider._search_code
+
+        def slow_search(*args, **kwargs):
+            time.sleep(0.1)
+            return original_search(*args, **kwargs)
+
+        monkeypatch.setattr(provider, "_search_code", slow_search)
+        task = asyncio.create_task(provider.search_code("def"))
+        started_at = asyncio.get_running_loop().time()
+        await asyncio.sleep(0.01)
+        elapsed = asyncio.get_running_loop().time() - started_at
+        assert elapsed < 0.05
+        await task
 
 
 class TestLocalRepoProviderListFiles:

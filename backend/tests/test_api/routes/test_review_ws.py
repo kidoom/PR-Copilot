@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-import asyncio
-import json
-
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from backend.agent.runtime.events import RUN_STARTED, RUN_COMPLETED, RUN_CANCELLED
-from backend.agent.runtime.run_manager import RunManager
+from backend.agent.runtime.events import RUN_STARTED, RUN_COMPLETED
 from backend.api.routes.review_ws import router
 
 

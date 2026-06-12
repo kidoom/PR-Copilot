@@ -230,7 +230,7 @@ class TestMicroCompact:
         assert compacted[2].content[0].content == "x" * 2000
 
     def test_compacts_multiple_tools(self):
-        tool_names = ["read_file_patch", "search_repo", "read_repo_file", "search_tests_for"]
+        tool_names = ["read_file_patch", "search_repo", "search_tests_for", "search_diff"]
         for tool_name in tool_names:
             messages = [
                 Message(role=Role.USER, content="test"),
@@ -245,6 +245,22 @@ class TestMicroCompact:
 
             assert isinstance(compacted[2].content, list)
             assert "[Compacted:" in compacted[2].content[0].content, f"Failed for {tool_name}"
+
+    def test_skips_evidence_critical_tools(self):
+        """read_repo_file is evidence-critical and must never be compacted."""
+        messages = [
+            Message(role=Role.USER, content="test"),
+            Message(role=Role.ASSISTANT, content=[
+                ToolUseBlock(tool_use_id="1", name="read_repo_file", input={}),
+            ]),
+            Message(role=Role.TOOL, content=[
+                ToolResultBlock(tool_use_id="1", content="x" * 2000),
+            ]),
+        ]
+        compacted = micro_compact_messages(messages, recent_count=0, min_chars=1000)
+
+        assert isinstance(compacted[2].content, list)
+        assert compacted[2].content[0].content == "x" * 2000
 
     def test_preserves_user_messages(self):
         messages = [

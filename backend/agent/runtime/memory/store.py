@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
-from datetime import datetime, timezone
+import shutil
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from backend.agent.runtime.memory.models import (
     AgentKind,
@@ -68,10 +72,17 @@ class FileMemoryStore:
     - transcript.jsonl: append-only transcript entries
     """
 
-    def __init__(self, storage_dir: str | Path):
+    def __init__(self, storage_dir: str | Path, *, auto_cleanup: bool = True):
         self._storage_dir = Path(storage_dir)
         self._memory_dir = self._storage_dir / "memory"
         self._sessions: dict[str, MemorySessionMeta] = {}
+
+        # Run cleanup on initialization to prevent indefinite growth
+        if auto_cleanup:
+            try:
+                self.run_cleanup()
+            except Exception:
+                logger.warning("Failed to run memory session cleanup on init", exc_info=True)
 
     @property
     def storage_dir(self) -> Path:
@@ -312,3 +323,67 @@ class FileMemoryStore:
                     continue
 
         return entries
+
+    def delete_session(self, session_id: str) -> bool:
+        """Delete a session from disk and memory cache.
+
+        Returns True if session was deleted, False if not found.
+        """
+        meta = self.get_session(session_id)
+        if meta is None:
+            return False
+
+        session_dir = self._session_dir(meta)
+        if session_dir.exists():
+            shutil.rmtree(session_dir, ignore_errors=True)
+
+        self._sessions.pop(session_id, None)
+        return True
+
+    def cleanup_expired(self, max_age_hours: int = 168) -> int:
+        """Delete sessions older than max_age_hours (default 7 days).
+
+        Returns the number of deleted sessions.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+        deleted = 0
+
+        for session in list(self.list_sessions()):
+            if session.updated_at < cutoff:
+                if self.delete_session(session.session_id):
+                    deleted += 1
+
+        if deleted > 0:
+            logger.info("Cleaned up %d expired memory sessions (older than %dh)", deleted, max_age_hours)
+        return deleted
+
+    def enforce_max_sessions(self, max_sessions: int = 100) -> int:
+        """Keep only the most recent max_sessions, delete the rest.
+
+        Returns the number of deleted sessions.
+        """
+        sessions = self.list_sessions()
+        if len(sessions) <= max_sessions:
+            return 0
+
+        # Sort by updated_at descending
+        sessions.sort(key=lambda s: s.updated_at, reverse=True)
+        to_delete = sessions[max_sessions:]
+        deleted = 0
+
+        for session in to_delete:
+            if self.delete_session(session.session_id):
+                deleted += 1
+
+        if deleted > 0:
+            logger.info("Enforced max sessions limit: deleted %d old sessions (keeping %d)", deleted, max_sessions)
+        return deleted
+
+    def run_cleanup(self, *, max_age_hours: int = 168, max_sessions: int = 100) -> int:
+        """Run both TTL and count-based cleanup.
+
+        Returns total number of deleted sessions.
+        """
+        deleted = self.cleanup_expired(max_age_hours=max_age_hours)
+        deleted += self.enforce_max_sessions(max_sessions=max_sessions)
+        return deleted

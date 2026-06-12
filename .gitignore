@@ -7,5 +7,12 @@ dist/
 __pycache__/
 *.pyc
 
+# Runtime data
+.pr-copilot/
+
+# Claude Code local settings
+.claude/
+
 # Openspec (not for production)
 openspec/
+PR-Copilot/

@@ -9,11 +9,16 @@ from backend.agent.model.messages import Message, Role, ToolResultBlock, ToolUse
 # Whitelist of tools whose results can be compacted
 COMPACTABLE_TOOLS = frozenset({
     "read_file_patch",
-    "read_repo_file",
     "search_repo",
     "search_tests_for",
     "read_repo_manifest",
     "read_check_summary",
+    "search_diff",
+})
+
+# Tools that are critical evidence sources — never compact their results
+EVIDENCE_CRITICAL_TOOLS = frozenset({
+    "read_repo_file",
 })
 
 # Tools that should never be compacted
@@ -45,10 +50,13 @@ def is_compactable_tool_result(
 
     Conditions:
     - Tool is in compactable whitelist
+    - Tool is not evidence-critical (never compacted)
     - Result is not an error
     - Result content is above minimum size threshold
     """
     if tool_use_name in EXCLUDED_TOOLS:
+        return False
+    if tool_use_name in EVIDENCE_CRITICAL_TOOLS:
         return False
     if tool_use_name not in COMPACTABLE_TOOLS:
         return False

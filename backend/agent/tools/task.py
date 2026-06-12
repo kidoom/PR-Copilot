@@ -2,12 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import os
 from typing import Any, Callable, Awaitable
 
+from backend.agent.runtime.accounting import OperationUsage, RunUsage, RuntimeFailureReason
 from backend.agent.runtime.agent_def import AgentRegistry
+from backend.agent.runtime.cancellation import CancellationProbe, Cancelled
 from backend.agent.runtime.review_result import ReviewResult, parse_review_result, validate_review_result
 from backend.agent.runtime.sub_agent import SubAgentResult
 from backend.agent.tools.protocol import RiskLevel
+
+logger = logging.getLogger(__name__)
 
 Runner = Callable[..., Awaitable[SubAgentResult]]
 
@@ -25,13 +31,20 @@ class TaskTool:
         runner: Runner,
         agent_registry: AgentRegistry | None = None,
         agent_types: list[str] | None = None,
-        max_concurrent_tasks: int = 4,
+        max_concurrent_tasks: int = 6,
+        cancellation_probe: CancellationProbe | None = None,
+        run_usage: RunUsage | None = None,
+        run_budget_remaining: int | None = None,
     ) -> None:
         self._runner = runner
         self._agent_types = agent_types or (agent_registry.names() if agent_registry is not None else ["default"])
         if not self._agent_types:
             self._agent_types = ["default"]
         self._max_concurrent_tasks = max(1, int(max_concurrent_tasks))
+        self._cancellation_probe = cancellation_probe
+        self._last_batch_results: list[dict[str, Any]] | None = None
+        self._run_usage = run_usage
+        self._run_budget_remaining = run_budget_remaining
 
     @property
     def name(self) -> str:
@@ -161,8 +174,15 @@ class TaskTool:
         results: list[dict[str, Any] | None] = [None] * len(tasks)
         semaphore = asyncio.Semaphore(self._max_concurrent_tasks)
 
+        # Stagger delay between subagent starts (seconds). Set to 0 to disable.
+        _stagger_delay = float(os.environ.get("PR_COPILOT_SUBAGENT_STAGGER_DELAY", "0"))
+
         async def _dispatch_one(index: int, raw_task: dict[str, Any]) -> None:
             async with semaphore:
+                # Stagger subagent starts to avoid API rate limiting
+                if _stagger_delay > 0 and index > 0:
+                    await asyncio.sleep(min(index * _stagger_delay, 5.0))
+
                 route = _resolve_route(raw_task, route_index)
                 effective_agent_type = (
                     raw_task.get("agent_type")
@@ -187,6 +207,14 @@ class TaskTool:
                         max_steps=task_max_steps,
                     )
                 except Exception as exc:
+                    failure_reason = RuntimeFailureReason.UNKNOWN.value
+                    if "timeout" in str(exc).lower():
+                        failure_reason = RuntimeFailureReason.TIMEOUT.value
+                    elif "budget" in str(exc).lower():
+                        failure_reason = RuntimeFailureReason.BUDGET_EXHAUSTED.value
+                    elif isinstance(exc, Cancelled):
+                        failure_reason = RuntimeFailureReason.CANCELLED.value
+
                     results[index] = {
                         "index": index,
                         "task_id": task_payload.get("task_id", ""),
@@ -194,6 +222,7 @@ class TaskTool:
                         "agent_type": effective_agent_type,
                         "status": "error",
                         "error": str(exc),
+                        "failure_reason": failure_reason,
                     }
                     return
 
@@ -201,6 +230,25 @@ class TaskTool:
                 parsed = parse_review_result(result.output)
                 validation_errors = validate_review_result(parsed) if parsed else ["Failed to parse JSON"]
                 is_valid = parsed is not None and len(validation_errors) == 0
+
+                # Propagate SubAgent usage (task 4.3)
+                subagent_usage = {
+                    "input_tokens": result.token_usage.input_tokens if result.token_usage else 0,
+                    "output_tokens": result.token_usage.output_tokens if result.token_usage else 0,
+                    "model_calls": len(result.steps) if result.steps else 0,
+                }
+
+                # Aggregate into run usage if available
+                if self._run_usage:
+                    op = OperationUsage(
+                        operation_type=task_payload.get("task_type", "unknown"),
+                        agent_type=result.agent_type,
+                        task_id=task_payload.get("task_id", ""),
+                        model_calls=subagent_usage["model_calls"],
+                        input_tokens=subagent_usage["input_tokens"],
+                        output_tokens=subagent_usage["output_tokens"],
+                    )
+                    self._run_usage.add_operation(op)
 
                 results[index] = {
                     "index": index,
@@ -216,11 +264,21 @@ class TaskTool:
                     "parsed_result": parsed.to_dict() if parsed else None,
                     "parse_status": "valid" if is_valid else "invalid",
                     "validation_errors": validation_errors if not is_valid else [],
+                    "subagent_usage": subagent_usage,
                 }
 
         pending: list[Awaitable[None]] = []
 
         for index, raw_task in enumerate(tasks):
+            # Stop starting new sibling SubAgents after cancellation (task 4.5)
+            if self._cancellation_probe is not None and self._cancellation_probe.is_cancelled():
+                results[index] = {
+                    "index": index,
+                    "status": "cancelled",
+                    "error": "Dispatch cancelled: run is being cancelled",
+                }
+                continue
+
             if not isinstance(raw_task, dict):
                 results[index] = {
                     "index": index,
@@ -231,9 +289,23 @@ class TaskTool:
             pending.append(_dispatch_one(index, raw_task))
 
         if pending:
-            await asyncio.gather(*pending)
+            # Use return_exceptions=True to handle cancellation gracefully
+            gather_results = await asyncio.gather(*pending, return_exceptions=True)
+            # Check if any sibling raised Cancelled (task 4.6)
+            for i, result_or_exc in enumerate(gather_results):
+                if isinstance(result_or_exc, Cancelled):
+                    # Mark remaining pending results as cancelled
+                    for j in range(len(results)):
+                        if results[j] is None:
+                            results[j] = {
+                                "index": j,
+                                "status": "cancelled",
+                                "error": "Cancelled: run is being cancelled",
+                            }
 
-        return [r for r in results if r is not None]
+        final_results = [r for r in results if r is not None]
+        self._last_batch_results = final_results  # task 5.8: capture for aggregation
+        return final_results
 
     async def run(
         self,

@@ -23,6 +23,8 @@ import {
   FolderOpen,
   Layers,
   X,
+  Bot,
+  History,
 } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
@@ -44,8 +46,22 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { analyzePr, getIntakeSummary, getFilePatch } from "@/api"
-import type { PrContextResponse, FileEntry, IntakeSummary, FilePatchResponse } from "@/types"
+import {
+  analyzePr,
+  getIntakeSummary,
+  getFilePatch,
+  getReviewRun,
+  listAllSessions,
+} from "@/api"
+import type { PrSessionSummary } from "@/api"
+import type {
+  PrContextResponse,
+  FileEntry,
+  IntakeSummary,
+  FilePatchResponse,
+  FinalReviewResult,
+} from "@/types"
+import { ReviewPanel } from "@/components/ReviewPanel"
 
 function getStatusBadgeVariant(status: string) {
   if (status === "added") return "default" as const
@@ -64,11 +80,11 @@ function getFileTypeIcon(file: FileEntry) {
 
 function getRiskHintLabel(hint: string) {
   const labels: Record<string, string> = {
-    auth_path: "Auth",
-    payment_path: "Payment",
-    db_path: "Database",
-    config_path: "Config",
-    no_test_pair: "No tests",
+    auth_path: "认证",
+    payment_path: "支付",
+    db_path: "数据库",
+    config_path: "配置",
+    no_test_pair: "无测试",
   }
 
   return labels[hint] ?? hint.replaceAll("_", " ")
@@ -97,46 +113,102 @@ function getRiskHintClassName(hint: string) {
 function getErrorGuidance(error: string): string {
   const lower = error.toLowerCase()
   if (lower.includes("404") || lower.includes("not found"))
-    return "Check that the PR URL is correct and the repository exists on GitHub."
+    return "请检查 PR 链接是否正确，以及仓库是否存在于 GitHub 上。"
   if (lower.includes("401") || lower.includes("403") || lower.includes("unauthorized"))
-    return "The repository may be private. Try providing a GitHub token with repo access."
+    return "该仓库可能是私有的。请运行 `gh auth login` 或设置 GH_TOKEN 后重试。"
   if (lower.includes("rate"))
-    return "GitHub API rate limit exceeded. Wait a moment or provide a GitHub token."
+    return "GitHub API 请求频率超限。请设置 GH_TOKEN 或运行 `gh auth login` 以获取更高限额。"
   if (lower.includes("network") || lower.includes("fetch"))
-    return "Could not reach the backend. Make sure the server is running on port 8000."
-  return "Check the PR URL and ensure the repository is accessible."
+    return "无法连接后端服务。请确认服务器已在 8000 端口运行。"
+  return "请检查 PR 链接并确保仓库可访问。"
 }
 
-function EmptyState() {
+function EmptyState({
+  sessions,
+  onSessionClick,
+}: {
+  sessions: PrSessionSummary[]
+  onSessionClick: (session: PrSessionSummary) => void
+}) {
   return (
     <div className="space-y-8">
       <div className="flex flex-col items-center justify-center py-12 text-center">
         <div className="mb-4 rounded-full bg-muted p-4">
           <GitPullRequest className="h-8 w-8 text-muted-foreground" />
         </div>
-        <h2 className="mb-2 text-lg font-semibold">Analyze a Pull Request</h2>
+        <h2 className="mb-2 text-lg font-semibold">分析 Pull Request</h2>
         <p className="mb-6 max-w-md text-sm text-muted-foreground">
-          Paste a GitHub PR URL above to get instant risk analysis, changed file
-          summary, and review guidance.
+          在上方粘贴 GitHub PR 链接，即可获取风险分析、变更文件摘要和审查建议。
         </p>
         <div className="flex items-center gap-2 rounded-lg border bg-muted/50 px-4 py-2 text-xs text-muted-foreground">
           <Info className="h-3.5 w-3.5" />
-          <span>Try: https://github.com/owner/repo/pull/123</span>
+          <span>示例: https://github.com/owner/repo/pull/123</span>
         </div>
       </div>
+
+      {sessions.length > 0 && (
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex items-center gap-2">
+              <History className="h-4 w-4" />
+              <CardTitle className="text-sm font-medium">历史审查记录</CardTitle>
+            </div>
+            <CardDescription>点击可查看之前的审查结果</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="divide-y">
+              {sessions.map((s) => (
+                <button
+                  key={s.pr_session_id}
+                  className="flex w-full items-start gap-3 py-2.5 text-left hover:bg-muted/50 transition-colors rounded px-2 -mx-2"
+                  onClick={() => onSessionClick(s)}
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate text-sm font-medium">
+                        {s.owner}/{s.repo}#{s.pull_number}
+                      </span>
+                      {s.latest_lifecycle && (
+                        <span className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded-full ${
+                          s.latest_lifecycle === "completed"
+                            ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+                            : s.latest_lifecycle === "failed"
+                              ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
+                              : "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400"
+                        }`}>
+                          {s.latest_lifecycle === "completed" ? "已完成" : s.latest_lifecycle === "failed" ? "失败" : s.latest_lifecycle === "cancelled" ? "已取消" : s.latest_lifecycle}
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
+                      <span>{new Date(s.updated_at).toLocaleString("zh-CN")}</span>
+                      <span>{s.run_count} 次审查</span>
+                      {s.latest_finding_count != null && s.latest_finding_count > 0 && (
+                        <span>{s.latest_finding_count} 个发现</span>
+                      )}
+                    </div>
+                    {s.latest_summary && (
+                      <p className="mt-0.5 text-[11px] text-muted-foreground line-clamp-1">{s.latest_summary}</p>
+                    )}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid gap-4 md:grid-cols-3">
         <Card className="border-dashed">
           <CardHeader className="pb-3">
             <div className="flex items-center gap-2 text-muted-foreground">
               <Shield className="h-4 w-4" />
-              <CardTitle className="text-sm font-medium">Risk Summary</CardTitle>
+              <CardTitle className="text-sm font-medium">风险概览</CardTitle>
             </div>
           </CardHeader>
           <CardContent>
             <p className="text-xs text-muted-foreground">
-              Identifies high-risk files, security-sensitive changes, and source
-              modifications without test coverage.
+              识别高风险文件、安全敏感变更以及缺少测试覆盖的源代码修改。
             </p>
           </CardContent>
         </Card>
@@ -145,13 +217,12 @@ function EmptyState() {
           <CardHeader className="pb-3">
             <div className="flex items-center gap-2 text-muted-foreground">
               <Files className="h-4 w-4" />
-              <CardTitle className="text-sm font-medium">Changed Files</CardTitle>
+              <CardTitle className="text-sm font-medium">变更文件</CardTitle>
             </div>
           </CardHeader>
           <CardContent>
             <p className="text-xs text-muted-foreground">
-              Lists all modified files with language, change size, status badges,
-              and priority scores for focused review.
+              列出所有修改文件，包含语言、变更量、状态标签和优先级评分，便于重点审查。
             </p>
           </CardContent>
         </Card>
@@ -160,13 +231,12 @@ function EmptyState() {
           <CardHeader className="pb-3">
             <div className="flex items-center gap-2 text-muted-foreground">
               <Search className="h-4 w-4" />
-              <CardTitle className="text-sm font-medium">Review Guidance</CardTitle>
+              <CardTitle className="text-sm font-medium">审查建议</CardTitle>
             </div>
           </CardHeader>
           <CardContent>
             <p className="text-xs text-muted-foreground">
-              Provides actionable recommendations based on change patterns, risk
-              signals, and file dependencies.
+              基于变更模式、风险信号和文件依赖关系，提供可操作的审查建议。
             </p>
           </CardContent>
         </Card>
@@ -182,14 +252,14 @@ function LoadingState() {
         <div className="mb-4 rounded-full bg-muted p-4">
           <Spinner className="h-8 w-8" />
         </div>
-        <h2 className="mb-2 text-lg font-semibold">Analyzing pull request</h2>
+        <h2 className="mb-2 text-lg font-semibold">正在分析 PR</h2>
         <p className="max-w-md text-sm text-muted-foreground">
-          Fetching PR metadata, changed files, and risk signals from the backend.
+          正在从后端获取 PR 元数据、变更文件和风险信号。
         </p>
         <div className="mt-6 grid w-full max-w-xl gap-2 text-left text-xs text-muted-foreground sm:grid-cols-3">
-          <div className="rounded-lg border bg-muted/30 p-3">Fetching PR</div>
-          <div className="rounded-lg border bg-muted/30 p-3">Reading files</div>
-          <div className="rounded-lg border bg-muted/30 p-3">Preparing review</div>
+          <div className="rounded-lg border bg-muted/30 p-3">获取 PR</div>
+          <div className="rounded-lg border bg-muted/30 p-3">读取文件</div>
+          <div className="rounded-lg border bg-muted/30 p-3">准备审查</div>
         </div>
       </CardContent>
     </Card>
@@ -207,7 +277,7 @@ function ResultDashboard({ result, intake, onFileClick }: { result: PrContextRes
   const highPriorityFiles = result.files.filter((f) => f.priority_score_hint >= 60)
   const riskFiles = result.files.filter((f) => f.is_high_risk_path)
   const reviewFocus =
-    riskFiles[0]?.filename ?? highPriorityFiles[0]?.filename ?? "No urgent file focus"
+    riskFiles[0]?.filename ?? highPriorityFiles[0]?.filename ?? "无紧急关注文件"
 
   return (
     <div className="space-y-6">
@@ -216,41 +286,41 @@ function ResultDashboard({ result, intake, onFileClick }: { result: PrContextRes
         <Card>
           <CardContent className="pt-4">
             <div className="flex items-center justify-between">
-              <div className="text-xs text-muted-foreground">Changes</div>
+              <div className="text-xs text-muted-foreground">变更</div>
               <Files className="h-3.5 w-3.5 text-muted-foreground" />
             </div>
             <div className="mt-1 text-2xl font-bold">{result.pr.changed_files}</div>
-            <div className="text-xs text-muted-foreground">files modified</div>
+            <div className="text-xs text-muted-foreground">个文件修改</div>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-4">
             <div className="flex items-center justify-between">
-              <div className="text-xs text-muted-foreground">Additions</div>
+              <div className="text-xs text-muted-foreground">新增</div>
               <Plus className="h-3.5 w-3.5 text-green-600" />
             </div>
             <div className="mt-1 text-2xl font-bold text-green-600">
               +{totalAdditions}
             </div>
-            <div className="text-xs text-muted-foreground">lines added</div>
+            <div className="text-xs text-muted-foreground">行添加</div>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-4">
             <div className="flex items-center justify-between">
-              <div className="text-xs text-muted-foreground">Deletions</div>
+              <div className="text-xs text-muted-foreground">删除</div>
               <Minus className="h-3.5 w-3.5 text-red-600" />
             </div>
             <div className="mt-1 text-2xl font-bold text-red-600">
               -{totalDeletions}
             </div>
-            <div className="text-xs text-muted-foreground">lines removed</div>
+            <div className="text-xs text-muted-foreground">行删除</div>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-4">
             <div className="flex items-center justify-between">
-              <div className="text-xs text-muted-foreground">Risk Level</div>
+              <div className="text-xs text-muted-foreground">风险等级</div>
               {hasHighRisk || hasSourceWithoutTests ? (
                 <ShieldAlert className="h-3.5 w-3.5 text-destructive" />
               ) : (
@@ -258,12 +328,12 @@ function ResultDashboard({ result, intake, onFileClick }: { result: PrContextRes
               )}
             </div>
             <div className="mt-1 text-2xl font-bold">
-              {hasHighRisk || hasSourceWithoutTests ? "Elevated" : "Low"}
+              {hasHighRisk || hasSourceWithoutTests ? "偏高" : "低"}
             </div>
             <div className="text-xs text-muted-foreground">
               {hasHighRisk
-                ? `${result.derived.high_risk_files.length} high-risk files`
-                : "no critical signals"}
+                ? `${result.derived.high_risk_files.length} 个高风险文件`
+                : "无关键信号"}
             </div>
           </CardContent>
         </Card>
@@ -276,7 +346,7 @@ function ResultDashboard({ result, intake, onFileClick }: { result: PrContextRes
             <CardHeader className="pb-3">
               <div className="flex items-center gap-2">
                 <Layers className="h-4 w-4" />
-                <CardTitle className="text-sm font-medium">PR Size</CardTitle>
+                <CardTitle className="text-sm font-medium">PR 规模</CardTitle>
               </div>
             </CardHeader>
             <CardContent>
@@ -293,11 +363,11 @@ function ResultDashboard({ result, intake, onFileClick }: { result: PrContextRes
                 {intake.size}
               </Badge>
               <div className="mt-2 text-xs text-muted-foreground">
-                {intake.change_type === "docs" && "Documentation changes only"}
-                {intake.change_type === "test" && "Test changes only"}
-                {intake.change_type === "config" && "Configuration changes only"}
-                {intake.change_type === "source" && "Source code changes"}
-                {intake.change_type === "mixed" && "Mixed change types"}
+                {intake.change_type === "docs" && "仅文档变更"}
+                {intake.change_type === "test" && "仅测试变更"}
+                {intake.change_type === "config" && "仅配置变更"}
+                {intake.change_type === "source" && "源代码变更"}
+                {intake.change_type === "mixed" && "混合变更类型"}
               </div>
               {intake.notable_signals.length > 0 && (
                 <div className="mt-2 flex flex-wrap gap-1">
@@ -315,7 +385,7 @@ function ResultDashboard({ result, intake, onFileClick }: { result: PrContextRes
             <CardHeader className="pb-3">
               <div className="flex items-center gap-2">
                 <BarChart3 className="h-4 w-4" />
-                <CardTitle className="text-sm font-medium">Language Distribution</CardTitle>
+                <CardTitle className="text-sm font-medium">语言分布</CardTitle>
               </div>
             </CardHeader>
             <CardContent>
@@ -337,7 +407,7 @@ function ResultDashboard({ result, intake, onFileClick }: { result: PrContextRes
             <CardHeader className="pb-3">
               <div className="flex items-center gap-2">
                 <FolderOpen className="h-4 w-4" />
-                <CardTitle className="text-sm font-medium">Top Directories</CardTitle>
+                <CardTitle className="text-sm font-medium">热门目录</CardTitle>
               </div>
             </CardHeader>
             <CardContent>
@@ -391,30 +461,30 @@ function ResultDashboard({ result, intake, onFileClick }: { result: PrContextRes
           <CardHeader className="pb-3">
             <div className="flex items-center gap-2">
               <Shield className="h-4 w-4" />
-              <CardTitle className="text-sm font-medium">Risk Signals</CardTitle>
+              <CardTitle className="text-sm font-medium">风险信号</CardTitle>
             </div>
           </CardHeader>
           <CardContent className="space-y-2">
             {isDocsOnly && (
               <div className="flex items-center gap-2">
-                <Badge variant="secondary">Docs only</Badge>
+                <Badge variant="secondary">仅文档</Badge>
                 <span className="text-xs text-muted-foreground">
-                  Documentation changes only
+                  仅文档变更
                 </span>
               </div>
             )}
             {hasSourceWithoutTests && (
               <div className="flex items-center gap-2">
-                <Badge variant="destructive">No test coverage</Badge>
+                <Badge variant="destructive">无测试覆盖</Badge>
                 <span className="text-xs text-muted-foreground">
-                  Source files changed without corresponding tests
+                  源文件已修改但缺少对应测试
                 </span>
               </div>
             )}
             {hasHighRisk && (
               <div className="space-y-1">
                 <div className="flex items-center gap-2">
-                  <Badge variant="destructive">High-risk paths</Badge>
+                  <Badge variant="destructive">高风险路径</Badge>
                 </div>
                 <div className="flex flex-wrap gap-1">
                   {result.derived.high_risk_files.map((f) => (
@@ -428,7 +498,7 @@ function ResultDashboard({ result, intake, onFileClick }: { result: PrContextRes
             {!isDocsOnly && !hasSourceWithoutTests && !hasHighRisk && (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <CheckCircle className="h-4 w-4 text-green-600" />
-                <span>No critical risk signals detected</span>
+                <span>未检测到关键风险信号</span>
               </div>
             )}
           </CardContent>
@@ -441,7 +511,7 @@ function ResultDashboard({ result, intake, onFileClick }: { result: PrContextRes
           <CardHeader className="pb-3">
             <div className="flex items-center gap-2">
               <Search className="h-4 w-4" />
-              <CardTitle className="text-sm font-medium">Review Recommendations</CardTitle>
+              <CardTitle className="text-sm font-medium">审查建议</CardTitle>
             </div>
           </CardHeader>
           <CardContent>
@@ -450,11 +520,11 @@ function ResultDashboard({ result, intake, onFileClick }: { result: PrContextRes
                 <li className="flex items-start gap-2">
                   <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
                   <span>
-                    Focus on <strong>{highPriorityFiles.length} high-priority files</strong> first
-                    (score &ge; 60):
+                    优先关注 <strong>{highPriorityFiles.length} 个高优先级文件</strong>
+                    （评分 &ge; 60）：
                     <span className="ml-1 font-mono text-xs text-muted-foreground">
                       {highPriorityFiles.slice(0, 3).map((f) => f.filename).join(", ")}
-                      {highPriorityFiles.length > 3 && ` +${highPriorityFiles.length - 3} more`}
+                      {highPriorityFiles.length > 3 && ` +${highPriorityFiles.length - 3} 个更多`}
                     </span>
                   </span>
                 </li>
@@ -463,7 +533,7 @@ function ResultDashboard({ result, intake, onFileClick }: { result: PrContextRes
                 <li className="flex items-start gap-2">
                   <TestTube className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
                   <span>
-                    Consider adding or updating tests for the source files changed in this PR.
+                    建议为本次 PR 中变更的源文件添加或更新测试。
                   </span>
                 </li>
               )}
@@ -471,7 +541,7 @@ function ResultDashboard({ result, intake, onFileClick }: { result: PrContextRes
                 <li className="flex items-start gap-2">
                   <Shield className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
                   <span>
-                    Review high-risk paths carefully for security, auth, or infrastructure changes.
+                    仔细审查高风险路径中的安全、认证或基础设施变更。
                   </span>
                 </li>
               )}
@@ -479,7 +549,7 @@ function ResultDashboard({ result, intake, onFileClick }: { result: PrContextRes
                 <li className="flex items-start gap-2">
                   <BookOpen className="mt-0.5 h-4 w-4 shrink-0 text-blue-500" />
                   <span>
-                    Documentation-only change. Lower review urgency unless it affects public API docs.
+                    仅文档变更。除非影响公开 API 文档，否则审查优先级较低。
                   </span>
                 </li>
               )}
@@ -495,7 +565,7 @@ function ResultDashboard({ result, intake, onFileClick }: { result: PrContextRes
             <div className="flex items-center gap-2">
               <FileCode className="h-4 w-4" />
               <CardTitle className="text-sm font-medium">
-                Changed Files ({result.files.length})
+                变更文件 ({result.files.length})
               </CardTitle>
             </div>
           </div>
@@ -504,12 +574,12 @@ function ResultDashboard({ result, intake, onFileClick }: { result: PrContextRes
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>File</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Language</TableHead>
+                <TableHead>文件</TableHead>
+                <TableHead>状态</TableHead>
+                <TableHead>语言</TableHead>
                 <TableHead className="text-right">+/-</TableHead>
-                <TableHead>Risk</TableHead>
-                <TableHead className="text-right">Priority</TableHead>
+                <TableHead>风险</TableHead>
+                <TableHead className="text-right">优先级</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -558,7 +628,7 @@ function ResultDashboard({ result, intake, onFileClick }: { result: PrContextRes
                           variant="outline"
                           className="border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300"
                         >
-                          None
+                          无
                         </Badge>
                       )}
                     </div>
@@ -590,11 +660,11 @@ function ResultDashboard({ result, intake, onFileClick }: { result: PrContextRes
           <div className="flex items-center gap-2">
             <ShieldCheck className="h-4 w-4" />
             <CardTitle className="text-sm font-medium">
-              AI Review Readiness
+              AI 审查就绪
             </CardTitle>
           </div>
           <CardDescription>
-            PR Copilot prepared the review inputs below from the current PR.
+            PR Copilot 已从当前 PR 中提取以下审查输入。
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -602,55 +672,55 @@ function ResultDashboard({ result, intake, onFileClick }: { result: PrContextRes
             <div className="rounded-lg border bg-muted/30 p-3">
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <Files className="h-3.5 w-3.5" />
-                Files scanned
+                已扫描文件
               </div>
               <div className="mt-1 text-xl font-semibold">
                 {result.pr.changed_files}
               </div>
               <div className="text-xs text-muted-foreground">
-                {totalAdditions + totalDeletions} changed lines
+                {totalAdditions + totalDeletions} 行变更
               </div>
             </div>
 
             <div className="rounded-lg border bg-muted/30 p-3">
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <Shield className="h-3.5 w-3.5" />
-                Risk focus
+                风险焦点
               </div>
               <div className="mt-1 truncate text-sm font-medium">
                 {reviewFocus}
               </div>
               <div className="text-xs text-muted-foreground">
                 {riskFiles.length > 0
-                  ? `${riskFiles.length} high-risk files`
-                  : "No high-risk paths detected"}
+                  ? `${riskFiles.length} 个高风险文件`
+                  : "未检测到高风险路径"}
               </div>
             </div>
 
             <div className="rounded-lg border bg-muted/30 p-3">
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <TestTube className="h-3.5 w-3.5" />
-                Test signal
+                测试信号
               </div>
               <div className="mt-1 text-sm font-medium">
-                {hasSourceWithoutTests ? "Needs test review" : "No test gap signal"}
+                {hasSourceWithoutTests ? "需要测试审查" : "无测试缺口"}
               </div>
               <div className="text-xs text-muted-foreground">
-                {isDocsOnly ? "Documentation-only change" : "Based on file categories"}
+                {isDocsOnly ? "仅文档变更" : "基于文件分类"}
               </div>
             </div>
           </div>
 
           <div className="mt-4 rounded-lg border bg-background p-3 text-sm">
-            <div className="mb-2 font-medium">Suggested reviewer focus</div>
+            <div className="mb-2 font-medium">建议审查重点</div>
             <ul className="space-y-1 text-muted-foreground">
-              {hasHighRisk && <li>Review high-risk paths before merge approval.</li>}
-              {hasSourceWithoutTests && <li>Check whether source changes need tests.</li>}
+              {hasHighRisk && <li>合并审批前请审查高风险路径。</li>}
+              {hasSourceWithoutTests && <li>检查源代码变更是否需要测试。</li>}
               {highPriorityFiles.length > 0 && (
-                <li>Start with files scoring 60 or higher in priority.</li>
+                <li>优先处理评分 60 及以上的文件。</li>
               )}
               {!hasHighRisk && !hasSourceWithoutTests && highPriorityFiles.length === 0 && (
-                <li>No urgent signals detected. Continue with standard review.</li>
+                <li>未检测到紧急信号，请按常规流程审查。</li>
               )}
             </ul>
           </div>
@@ -724,22 +794,22 @@ function DiffSidebar({
             <div className="text-xs">
               {!patch.patch_available && (
                 <div className="p-4 text-muted-foreground">
-                  No patch available for this file.
+                  该文件无可用补丁。
                 </div>
               )}
               {patch.is_binary && (
                 <div className="p-4 text-muted-foreground">
-                  Binary file — diff not shown.
+                  二进制文件 — 不显示差异。
                 </div>
               )}
               {patch.parse_error && (
                 <div className="p-4 text-amber-600">
-                  Parse error: {patch.parse_error}
+                  解析错误: {patch.parse_error}
                 </div>
               )}
               {patch.truncated && (
                 <div className="border-b bg-amber-50 px-4 py-2 text-amber-700 dark:bg-amber-950/30 dark:text-amber-300">
-                  Diff truncated — showing first 500 lines.
+                  已截断 — 仅显示前 500 行。
                 </div>
               )}
               {patch.hunks.map((hunk, hi) => (
@@ -776,7 +846,7 @@ function DiffSidebar({
               ))}
               {patch.patch_available && patch.hunks.length === 0 && (
                 <div className="p-4 text-muted-foreground">
-                  No hunks in this patch.
+                  该补丁无差异块。
                 </div>
               )}
             </div>
@@ -793,6 +863,9 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<PrContextResponse | null>(null)
   const [intake, setIntake] = useState<IntakeSummary | null>(null)
+  const [showReviewPanel, setShowReviewPanel] = useState(false)
+  const [sessions, setSessions] = useState<PrSessionSummary[]>([])
+  const [historicalResult, setHistoricalResult] = useState<FinalReviewResult | null>(null)
 
   // Sidebar state
   const [selectedFile, setSelectedFile] = useState<FileEntry | null>(null)
@@ -800,6 +873,38 @@ function App() {
   const [patchData, setPatchData] = useState<FilePatchResponse | null>(null)
   const [patchError, setPatchError] = useState<string | null>(null)
   const patchRequestId = useRef(0)
+
+  // Load global session history on mount
+  useEffect(() => {
+    listAllSessions()
+      .then((data) => setSessions(data.sessions))
+      .catch(() => {})
+  }, [])
+
+  const handleSessionClick = useCallback(
+    async (session: PrSessionSummary) => {
+      // Load historical result directly
+      if (session.latest_run_id && session.latest_lifecycle === "completed") {
+        try {
+          const status = await getReviewRun(session.latest_run_id)
+          if (status.final_result) {
+            setHistoricalResult(status.final_result)
+            setShowReviewPanel(true)
+            // Also set the PR URL for context
+            const url = `https://github.com/${session.owner}/${session.repo}/pull/${session.pull_number}`
+            setPrUrl(url)
+            return
+          }
+        } catch {
+          // fall through to URL fill
+        }
+      }
+      // Fallback: just fill the PR URL
+      const url = `https://github.com/${session.owner}/${session.repo}/pull/${session.pull_number}`
+      setPrUrl(url)
+    },
+    [],
+  )
 
   // Lock body scroll when sidebar is open on mobile
   useEffect(() => {
@@ -833,7 +938,7 @@ function App() {
         setPatchData(data)
       } catch (e) {
         if (patchRequestId.current !== requestId) return
-        setPatchError(e instanceof Error ? e.message : "Failed to load patch")
+        setPatchError(e instanceof Error ? e.message : "加载补丁失败")
       } finally {
         if (patchRequestId.current === requestId) {
           setPatchLoading(false)
@@ -851,13 +956,14 @@ function App() {
 
   const handleAnalyze = async () => {
     if (!prUrl.trim()) {
-      setError("A GitHub PR URL is required to start analysis.")
+      setError("请输入 GitHub PR 链接以开始分析。")
       return
     }
     setLoading(true)
     setError(null)
     setResult(null)
     setIntake(null)
+    setHistoricalResult(null)
     closeSidebar()
     try {
       const data = await analyzePr(prUrl)
@@ -869,7 +975,7 @@ function App() {
         // intake is optional, don't block on failure
       }
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Request failed"
+      const msg = e instanceof Error ? e.message : "请求失败"
       setError(msg)
     } finally {
       setLoading(false)
@@ -886,14 +992,6 @@ function App() {
             <span className="text-sm font-semibold">PR Copilot</span>
             <Badge variant="outline" className="hidden text-xs sm:inline-flex">
               v0.1
-            </Badge>
-          </div>
-          <div className="flex items-center gap-2">
-            <Badge variant="secondary" className="hidden text-xs sm:inline-flex">
-              Backend: localhost:8000
-            </Badge>
-            <Badge variant="outline" className="hidden text-xs md:inline-flex">
-              Model: GPT-4
             </Badge>
           </div>
         </div>
@@ -927,34 +1025,65 @@ function App() {
               ) : (
                 <Search className="mr-2 h-4 w-4" />
               )}
-              {loading ? "Analyzing..." : "Analyze PR"}
+              {loading ? "分析中..." : "分析 PR"}
+            </Button>
+            <Button
+              variant={showReviewPanel ? "secondary" : "default"}
+              disabled={!result || loading}
+              onClick={() => setShowReviewPanel(!showReviewPanel)}
+              className="sm:w-auto"
+            >
+              <Bot className="mr-2 h-4 w-4" />
+              {showReviewPanel ? "隐藏审查" : "AI 审查"}
             </Button>
           </div>
 
           {loading && (
             <div className="mt-3 flex items-center gap-2 text-sm text-muted-foreground">
               <Spinner className="h-3.5 w-3.5" />
-              <span>Fetching PR context from GitHub...</span>
+              <span>正在从 GitHub 获取 PR 上下文...</span>
             </div>
           )}
         </div>
 
-        <section key={contentState}>
-          {contentState === "loading" && <LoadingState />}
-          {contentState === "error" && error && (
-            <Alert variant="destructive">
-              <AlertTriangle className="h-4 w-4" />
-              <AlertDescription>
-                <div className="font-medium">{error}</div>
-                <div className="mt-1 text-xs opacity-80">
-                  {getErrorGuidance(error)}
-                </div>
-              </AlertDescription>
-            </Alert>
+        <section key={contentState} className="flex min-h-0 gap-0">
+          <div className={`min-w-0 ${showReviewPanel && result ? "w-[60%]" : "w-full"}`}>
+            {contentState === "loading" && <LoadingState />}
+            {contentState === "error" && error && (
+              <Alert variant="destructive">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertDescription>
+                  <div className="font-medium">{error}</div>
+                  <div className="mt-1 text-xs opacity-80">
+                    {getErrorGuidance(error)}
+                  </div>
+                </AlertDescription>
+              </Alert>
+            )}
+            {contentState === "empty" && <EmptyState sessions={sessions} onSessionClick={handleSessionClick} />}
+            {contentState === "result" && result && (
+              <ResultDashboard result={result} intake={intake} onFileClick={handleFileClick} />
+            )}
+          </div>
+          {showReviewPanel && result && !historicalResult && (
+            <div className="sticky top-20 h-[calc(100vh-6.5rem)] w-[40%] shrink-0 self-start overflow-hidden">
+              <ReviewPanel
+                contextId={result.context_id}
+                onClose={() => { setShowReviewPanel(false); setHistoricalResult(null) }}
+                onFileClick={(filename) => {
+                  const file = result.files.find((f) => f.filename === filename)
+                  if (file) handleFileClick(file)
+                }}
+              />
+            </div>
           )}
-          {contentState === "empty" && <EmptyState />}
-          {contentState === "result" && result && (
-            <ResultDashboard result={result} intake={intake} onFileClick={handleFileClick} />
+          {showReviewPanel && historicalResult && (
+            <div className="sticky top-20 h-[calc(100vh-6.5rem)] w-[40%] shrink-0 self-start overflow-hidden">
+              <ReviewPanel
+                onClose={() => { setShowReviewPanel(false); setHistoricalResult(null) }}
+                initialResult={historicalResult}
+              />
+            </div>
           )}
         </section>
       </main>

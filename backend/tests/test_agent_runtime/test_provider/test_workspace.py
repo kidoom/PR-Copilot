@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import tempfile
+from unittest.mock import patch
 
 import pytest
 
@@ -13,6 +14,10 @@ from backend.agent.tools.repo_context.provider.models import (
 )
 from backend.agent.tools.repo_context.provider.workspace import (
     RepoWorkspaceManager,
+    _git_failure,
+    _is_retryable_git_failure,
+    _prepare_temp_clone,
+    _sanitize_dir_name,
     _verify_local_identity,
     _create_askpass_script,
     _cleanup_askpass,
@@ -66,6 +71,152 @@ class TestAskpassHelper:
         assert os.path.exists(script_path)
         _cleanup_askpass(askpass_dir)
         assert not os.path.exists(askpass_dir)
+
+
+class TestTempClone:
+    def test_relative_temp_root_uses_absolute_git_paths(self):
+        with tempfile.TemporaryDirectory(dir=".") as tmpdir:
+            relative_temp_root = os.path.relpath(tmpdir)
+            identity = PRIdentity(owner="owner", repo="repo", head_sha="abc123def456")
+            calls = []
+
+            def fake_run_git(args, *, cwd, env=None, timeout=60):
+                calls.append((args, cwd, env))
+                if args[0] == "clone":
+                    os.makedirs(args[-1])
+                return subprocess.CompletedProcess(["git", *args], 0, "", "")
+
+            with patch(
+                "backend.agent.tools.repo_context.provider.workspace._run_git",
+                side_effect=fake_run_git,
+            ):
+                clone_dir, error = _prepare_temp_clone(identity, relative_temp_root)
+
+            assert error is None
+            assert clone_dir is not None
+            assert os.path.isabs(clone_dir)
+            assert calls[0][1] == os.path.abspath(relative_temp_root)
+            assert calls[0][0][-1] == clone_dir
+            assert calls[0][2]["GIT_CONFIG_KEY_0"] == "credential.helper"
+            assert calls[0][2]["GIT_CONFIG_VALUE_0"] == ""
+            assert calls[1][1] == clone_dir
+
+    def test_clone_failure_reports_stdout_and_exit_code(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            identity = PRIdentity(owner="owner", repo="repo", head_sha="abc123def456")
+
+            with patch(
+                "backend.agent.tools.repo_context.provider.workspace._run_git",
+                return_value=subprocess.CompletedProcess(
+                    ["git", "clone"],
+                    128,
+                    "fatal: network unavailable",
+                    "",
+                ),
+            ):
+                clone_dir, error = _prepare_temp_clone(identity, tmpdir)
+
+            assert clone_dir is None
+            assert error == "Clone failed (exit 128): fatal: network unavailable"
+
+    def test_fetch_retries_transient_network_failure(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            identity = PRIdentity(
+                owner="owner",
+                repo="repo",
+                head_sha="abc123def456",
+                pull_number=34,
+            )
+            fetch_attempts = 0
+
+            def fake_run_git(args, *, cwd, env=None, timeout=60):
+                nonlocal fetch_attempts
+                if args[0] == "clone":
+                    os.makedirs(args[-1])
+                    return subprocess.CompletedProcess(["git", *args], 0, "", "")
+                if args[0] == "fetch":
+                    fetch_attempts += 1
+                    if fetch_attempts == 1:
+                        return subprocess.CompletedProcess(
+                            ["git", *args],
+                            128,
+                            "",
+                            "fatal: Recv failure: Connection was reset",
+                        )
+                return subprocess.CompletedProcess(["git", *args], 0, "", "")
+
+            with (
+                patch(
+                    "backend.agent.tools.repo_context.provider.workspace._run_git",
+                    side_effect=fake_run_git,
+                ),
+                patch("backend.agent.tools.repo_context.provider.workspace.time.sleep"),
+            ):
+                clone_dir, error = _prepare_temp_clone(identity, tmpdir)
+
+            assert error is None
+            assert clone_dir is not None
+            assert fetch_attempts == 2
+
+    def test_fetch_does_not_retry_missing_ref(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            identity = PRIdentity(
+                owner="owner",
+                repo="repo",
+                head_sha="abc123def456",
+                pull_number=999,
+            )
+            fetch_attempts = 0
+
+            def fake_run_git(args, *, cwd, env=None, timeout=60):
+                nonlocal fetch_attempts
+                if args[0] == "clone":
+                    os.makedirs(args[-1])
+                    return subprocess.CompletedProcess(["git", *args], 0, "", "")
+                if args[0] == "fetch":
+                    fetch_attempts += 1
+                    return subprocess.CompletedProcess(
+                        ["git", *args],
+                        128,
+                        "",
+                        "fatal: couldn't find remote ref refs/pull/999/head",
+                    )
+                return subprocess.CompletedProcess(["git", *args], 0, "", "")
+
+            with patch(
+                "backend.agent.tools.repo_context.provider.workspace._run_git",
+                side_effect=fake_run_git,
+            ):
+                clone_dir, error = _prepare_temp_clone(identity, tmpdir)
+
+            assert clone_dir is None
+            assert "couldn't find remote ref" in error
+            assert fetch_attempts == 1
+
+    def test_stale_identity_directory_does_not_block_fresh_clone(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            identity = PRIdentity(owner="owner", repo="repo", head_sha="abc123def456")
+            stale_dir = os.path.join(tmpdir, "owner__repo__abc123def456")
+            os.makedirs(stale_dir)
+            with open(os.path.join(stale_dir, "stale.txt"), "w") as f:
+                f.write("stale")
+
+            def fake_run_git(args, *, cwd, env=None, timeout=60):
+                if args[0] == "clone":
+                    os.makedirs(args[-1])
+                return subprocess.CompletedProcess(["git", *args], 0, "", "")
+
+            with patch(
+                "backend.agent.tools.repo_context.provider.workspace._run_git",
+                side_effect=fake_run_git,
+            ):
+                clone_dir, error = _prepare_temp_clone(identity, tmpdir)
+
+            assert error is None
+            assert clone_dir is not None
+            assert clone_dir != stale_dir
+            assert os.path.isdir(clone_dir)
+            assert os.path.isfile(os.path.join(stale_dir, "stale.txt"))
 
 
 class TestRepoWorkspaceManager:
@@ -212,3 +363,49 @@ class TestRepoWorkspaceManager:
             assert result.ok is False
             assert result.error is not None
             assert result.error.kind == PreparationErrorKind.CLONE_FAILED
+
+
+class TestSanitizeDirName:
+    def test_normal_name_unchanged(self):
+        assert _sanitize_dir_name("my-repo") == "my-repo"
+
+    def test_strips_invalid_chars(self):
+        assert _sanitize_dir_name("org:repo") == "org_repo"
+        assert _sanitize_dir_name("a<b>c") == "a_b_c"
+        assert _sanitize_dir_name('a"b') == "a_b"
+
+    def test_strips_trailing_dots_and_spaces(self):
+        assert _sanitize_dir_name("repo...") == "repo"
+        assert _sanitize_dir_name("repo   ") == "repo"
+
+    def test_empty_returns_repo(self):
+        assert _sanitize_dir_name("") == "repo"
+
+
+def test_git_failure_reports_empty_output():
+    result = subprocess.CompletedProcess(["git", "clone"], 1, "", "")
+    assert _git_failure("Clone", result) == "Clone failed (exit 1): Git produced no output"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "fatal: Recv failure: Connection was reset",
+        "fatal: unable to access URL: Failed to connect",
+        "fatal: schannel: failed to receive handshake",
+        "fatal: early EOF",
+    ],
+)
+def test_retryable_git_network_failures(message):
+    result = subprocess.CompletedProcess(["git", "fetch"], 128, "", message)
+    assert _is_retryable_git_failure(result) is True
+
+
+def test_auth_failure_is_not_retryable():
+    result = subprocess.CompletedProcess(
+        ["git", "fetch"],
+        128,
+        "",
+        "fatal: Authentication failed for repository",
+    )
+    assert _is_retryable_git_failure(result) is False

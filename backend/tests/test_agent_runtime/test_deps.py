@@ -49,16 +49,48 @@ def test_global_agent_deps_cache_can_preload(monkeypatch):
     assert deps.model_config.model == "test-model"
 
 
-def test_build_main_messages_includes_task_plan():
-    deps = create_agent_deps()
-    task_plan = {"context_id": "ctx1", "tasks": [], "routes": []}
+def test_agent_deps_reads_bounded_task_concurrency(monkeypatch):
+    monkeypatch.setenv("PR_COPILOT_MAX_CONCURRENT_TASKS", "3")
 
-    messages = deps.build_main_messages(task_plan)
+    deps = create_agent_deps()
+
+    assert deps.max_concurrent_tasks == 3
+
+
+def test_agent_deps_defaults_to_six_concurrent_tasks(monkeypatch):
+    monkeypatch.delenv("PR_COPILOT_MAX_CONCURRENT_TASKS", raising=False)
+
+    deps = create_agent_deps()
+
+    assert deps.max_concurrent_tasks == 6
+
+
+def test_build_main_messages_includes_synthesis_payload_without_full_task_plan():
+    deps = create_agent_deps()
+    task_plan = {
+        "context_id": "ctx1",
+        "tasks": [{"task_id": "task1", "task_type": "security_context"}],
+        "routes": [],
+    }
+
+    messages = deps.build_main_messages(task_plan, task_results=[{
+        "task_id": "task1",
+        "task_type": "security_context",
+        "agent_type": "security-context-agent",
+        "status": "ok",
+        "parse_status": "valid",
+        "parsed_result": {"status": "success", "summary": "checked", "findings": []},
+        "output": "raw output is intentionally omitted",
+    }])
 
     assert messages[0].role.value == "system"
-    assert "task" in messages[0].content
+    assert "已经" in messages[0].content or "already dispatched" in messages[0].content
     payload = json.loads(messages[1].content)
-    assert payload["task_plan"]["context_id"] == "ctx1"
+    assert "task_plan" not in payload
+    assert payload["task_plan_summary"]["context_id"] == "ctx1"
+    assert payload["task_plan_summary"]["task_type_counts"] == {"security_context": 1}
+    assert payload["task_results"][0]["task_id"] == "task1"
+    assert "output" not in payload["task_results"][0]
 
 
 @pytest.mark.asyncio

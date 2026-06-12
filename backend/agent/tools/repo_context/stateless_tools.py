@@ -16,6 +16,7 @@ from backend.agent.tools.repo_context.policy import (
     consume_token_budget,
     require_verification,
 )
+from backend.agent.runtime.cancellation import CancellationProbe
 
 
 # Constants for safety
@@ -223,9 +224,10 @@ class StatelessSearchDiffTool(Tool):
 class StatelessSearchRepoTool(Tool):
     """Search repository content by keyword."""
 
-    def __init__(self, repo_root: str, session: RepoContextSession | None = None) -> None:
+    def __init__(self, repo_root: str, session: RepoContextSession | None = None, cancellation_probe: CancellationProbe | None = None) -> None:
         self._repo_root = repo_root
         self._session = session
+        self._cancellation_probe = cancellation_probe
 
     @property
     def name(self) -> str: return "search_repo"
@@ -262,6 +264,11 @@ class StatelessSearchRepoTool(Tool):
             resolved_scope = Path(safe_scope).resolve()
 
         for dirpath, dirnames, filenames in os.walk(root):
+            # Check cancellation during long traversals (task 4.7)
+            if self._cancellation_probe is not None and self._cancellation_probe.is_cancelled():
+                _consume_search(self._session)
+                return json.dumps({"matches": matches, "total": len(matches), "truncated": True, "cancelled": True})
+
             dirnames[:] = [d for d in dirnames if not _is_ignored_directory(d)]
 
             if resolved_scope:
@@ -376,9 +383,10 @@ class StatelessReadRepoFileTool(Tool):
 class StatelessSearchTestsForTool(Tool):
     """Find candidate test files related to a source file."""
 
-    def __init__(self, repo_root: str, session: RepoContextSession | None = None) -> None:
+    def __init__(self, repo_root: str, session: RepoContextSession | None = None, cancellation_probe: CancellationProbe | None = None) -> None:
         self._repo_root = repo_root
         self._session = session
+        self._cancellation_probe = cancellation_probe
 
     @property
     def name(self) -> str: return "search_tests_for"
@@ -416,6 +424,11 @@ class StatelessSearchTestsForTool(Tool):
         ]
 
         for dirpath, dirnames, filenames in os.walk(root):
+            # Check cancellation during long traversals (task 4.7)
+            if self._cancellation_probe is not None and self._cancellation_probe.is_cancelled():
+                _consume_search(self._session)
+                return json.dumps({"candidates": candidates, "total": len(candidates), "status": "cancelled"})
+
             dirnames[:] = [d for d in dirnames if not _is_ignored_directory(d)]
             for fname in filenames:
                 fname_lower = fname.lower()
@@ -592,7 +605,7 @@ class StatelessVerifyRepoContextTool(Tool):
                 cwd=repo_root, capture_output=True, text=True, timeout=5,
             )
             remote = result.stdout.strip() if result.returncode == 0 else ""
-            if f"{owner}/{repo}" not in remote.lower():
+            if f"{owner}/{repo}".lower() not in remote.lower():
                 return _fail(f"Remote origin does not match {owner}/{repo}", remote=remote)
         except (OSError, subprocess.TimeoutExpired):
             return _fail("Cannot read git remote")
@@ -627,14 +640,18 @@ class StatelessVerifyRepoContextTool(Tool):
 
 
 class StatelessReadCheckSummaryTool(Tool):
-    """Read CI/CD check summary (placeholder)."""
+    """Read CI/CD check summary using trusted checks provider (task 8.1)."""
+
+    def __init__(self, checks_provider: Any = None) -> None:
+        self._checks_provider = checks_provider
 
     @property
     def name(self) -> str: return "read_check_summary"
     @property
-    def description(self) -> str: return "Read CI/CD check summary (placeholder)"
+    def description(self) -> str: return "Read CI/CD check summary for the PR head SHA"
     @property
     def input_schema(self) -> dict[str, Any]:
+        # Input schema is free of model-controlled fields (task 8.2)
         return {"type": "object", "properties": {}}
     @property
     def risk_level(self) -> RiskLevel: return RiskLevel.LOW
@@ -644,7 +661,16 @@ class StatelessReadCheckSummaryTool(Tool):
     def is_concurrency_safe(self) -> bool: return True
 
     async def call(self, input: dict[str, Any]) -> str:
-        return json.dumps({"status": "unavailable", "reason": "GitHub Checks integration not present"})
+        if self._checks_provider is None:
+            # Non-fatal: return unavailable (task 8.5)
+            return json.dumps({"status": "unavailable", "reason": "GitHub Checks integration not configured"})
+
+        try:
+            result = await self._checks_provider.get_summary()
+            return json.dumps(result.to_dict())
+        except Exception as e:
+            # Non-fatal: unavailable CI data becomes uncertainty, not failure (task 8.5)
+            return json.dumps({"status": "error", "reason": f"Failed to retrieve checks: {str(e)[:200]}"})
 
 
 class StatelessTodoWriteTool(Tool):
@@ -681,6 +707,8 @@ def create_stateless_context_tools(
     pr_context: Any,
     session: RepoContextSession | None = None,
     trusted_identity: Any = None,
+    cancellation_probe: CancellationProbe | None = None,
+    checks_provider: Any = None,
 ) -> list[Tool]:
     """Create stateless repo context tools using direct filesystem access.
 
@@ -711,11 +739,11 @@ def create_stateless_context_tools(
         ),
         StatelessReadFilePatchTool(pr_context),
         StatelessSearchDiffTool(pr_context),
-        StatelessSearchRepoTool(repo_root, session=session),
+        StatelessSearchRepoTool(repo_root, session=session, cancellation_probe=cancellation_probe),
         StatelessReadRepoFileTool(repo_root, session=session),
-        StatelessSearchTestsForTool(repo_root, session=session),
+        StatelessSearchTestsForTool(repo_root, session=session, cancellation_probe=cancellation_probe),
         StatelessReadRepoManifestTool(repo_root, session=session),
-        StatelessReadCheckSummaryTool(),
+        StatelessReadCheckSummaryTool(checks_provider=checks_provider),
     ]
 
 
@@ -724,9 +752,10 @@ def create_stateless_context_tools(
 class ProviderSearchRepoTool(Tool):
     """Search repository content via RepoProvider."""
 
-    def __init__(self, provider: Any, session: RepoContextSession | None = None) -> None:
+    def __init__(self, provider: Any, session: RepoContextSession | None = None, cancellation_probe: CancellationProbe | None = None) -> None:
         self._provider = provider
         self._session = session
+        self._cancellation_probe = cancellation_probe
 
     @property
     def name(self) -> str: return "search_repo"
@@ -746,6 +775,10 @@ class ProviderSearchRepoTool(Tool):
         err = _verification_error(self._session) or _search_budget_error(self._session)
         if err:
             return json.dumps(err)
+
+        # Check cancellation before provider request (task 4.7)
+        if self._cancellation_probe is not None and self._cancellation_probe.is_cancelled():
+            return json.dumps({"matches": [], "total": 0, "truncated": False, "cancelled": True})
 
         query = input["query"]
         path_scope = input.get("path_scope", "")
@@ -812,9 +845,10 @@ class ProviderReadRepoFileTool(Tool):
 class ProviderSearchTestsForTool(Tool):
     """Find candidate test files via RepoProvider."""
 
-    def __init__(self, provider: Any, session: RepoContextSession | None = None) -> None:
+    def __init__(self, provider: Any, session: RepoContextSession | None = None, cancellation_probe: CancellationProbe | None = None) -> None:
         self._provider = provider
         self._session = session
+        self._cancellation_probe = cancellation_probe
 
     @property
     def name(self) -> str: return "search_tests_for"
@@ -834,6 +868,10 @@ class ProviderSearchTestsForTool(Tool):
         err = _verification_error(self._session) or _search_budget_error(self._session)
         if err:
             return json.dumps(err)
+
+        # Check cancellation before provider request (task 4.7)
+        if self._cancellation_probe is not None and self._cancellation_probe.is_cancelled():
+            return json.dumps({"candidates": [], "total": 0, "status": "cancelled"})
 
         source_file = input["source_file"]
         limit = max(1, min(input.get("limit", 20), MAX_SEARCH_RESULTS))
@@ -920,6 +958,8 @@ def create_provider_backed_context_tools(
     pr_context: Any,
     session: RepoContextSession | None = None,
     trusted_identity: Any = None,
+    cancellation_probe: CancellationProbe | None = None,
+    checks_provider: Any = None,
 ) -> list[Tool]:
     """Create stateless repo context tools backed by a RepoProvider.
 
@@ -943,9 +983,9 @@ def create_provider_backed_context_tools(
         ),
         StatelessReadFilePatchTool(pr_context),
         StatelessSearchDiffTool(pr_context),
-        ProviderSearchRepoTool(provider, session=session),
+        ProviderSearchRepoTool(provider, session=session, cancellation_probe=cancellation_probe),
         ProviderReadRepoFileTool(provider, session=session),
-        ProviderSearchTestsForTool(provider, session=session),
+        ProviderSearchTestsForTool(provider, session=session, cancellation_probe=cancellation_probe),
         ProviderReadRepoManifestTool(provider, session=session),
-        StatelessReadCheckSummaryTool(),
+        StatelessReadCheckSummaryTool(checks_provider=checks_provider),
     ]

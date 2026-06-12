@@ -6,11 +6,14 @@ from unittest.mock import AsyncMock
 
 from backend.agent.model.client import ModelClient
 from backend.agent.model.messages import Message, ModelResponse, Role
+from backend.agent.runtime.agent_def import AgentDefinition
 from backend.agent.runtime.compression.config import CompressionConfig
 from backend.agent.runtime.main_runner import run_main_agent
 from backend.agent.runtime.memory import AgentKind, MemorySessionMeta
 from backend.agent.runtime.memory.store import FileMemoryStore
+from backend.agent.runtime.results import AgentResult
 from backend.agent.runtime.run_manager import RunManager
+from backend.agent.runtime.subagent_runner import run_subagent
 from backend.deps import AgentDeps
 
 
@@ -32,6 +35,10 @@ class TestMainRunnerCompression:
 
         model = AsyncMock(spec=ModelClient)
         model.chat = AsyncMock(return_value=ModelResponse(
+            content="done",
+            tool_use_blocks=[],
+        ))
+        model.chat_stream = AsyncMock(return_value=ModelResponse(
             content="done",
             tool_use_blocks=[],
         ))
@@ -58,7 +65,7 @@ class TestMainRunnerCompression:
         )
 
         assert "error" not in result
-        assert result["output"] == "done"
+        assert result["status"] == "completed"
 
     @pytest.mark.asyncio
     async def test_main_runner_creates_main_session(self, store, config):
@@ -107,3 +114,37 @@ class TestTaskToolCompressionBoundary:
         assert not hasattr(TaskTool, 'compression_config')
         assert not hasattr(TaskTool, 'execute_compact')
         assert not hasattr(TaskTool, 'micro_compact')
+
+
+class TestSubagentCompression:
+    @pytest.mark.asyncio
+    async def test_subagent_uses_global_compaction(self, monkeypatch, config):
+        """Review subagents use global compression config."""
+        captured = {}
+
+        async def fake_run_loop(**kwargs):
+            captured.update(kwargs)
+            return AgentResult(output="done")
+
+        monkeypatch.setattr(
+            "backend.agent.runtime.subagent_runner.run_loop",
+            fake_run_loop,
+        )
+
+        await run_subagent(
+            model=AsyncMock(spec=ModelClient),
+            agent_def=AgentDefinition(
+                name="reviewer",
+                description="Reviews code",
+                system_prompt="Review code and report evidence.",
+            ),
+            prompt="review this PR",
+            max_steps=5,
+            child_session_id="child-1",
+            child_tools=[],
+            compression_config=config,
+        )
+
+        subagent_config = captured["compression_config"]
+        # Subagents use the same compression config as the parent
+        assert subagent_config is config
