@@ -59,6 +59,27 @@ export async function createReviewTeam(input: ReviewTeamInput): Promise<ReviewTe
     ...input.orchestratorConfig,
   })
 
+  // Override the framework's generic synthesis prompt so the coordinator
+  // always receives explicit JSON-output instructions during synthesis.
+  // Without this, the LLM tends to write prose instead of a parseable
+  // findings JSON array, causing extractFindings() to return [].
+  const orchestratorAny = orchestrator as any
+  const originalBuildSynthesisPrompt = orchestratorAny.buildSynthesisPrompt.bind(orchestrator)
+  orchestratorAny.buildSynthesisPrompt = async function patchedBuildSynthesisPrompt(goal: string, tasks: any[], team: any) {
+    const base = await originalBuildSynthesisPrompt(goal, tasks, team)
+    return [
+      base,
+      '',
+      '## Output Format',
+      'You MUST end your response with a JSON array of findings in a ```json code fence.',
+      'Each finding object must have: file, line, severity, category, title, description, evidence, suggestion.',
+      'Allowed severities: critical, high, medium, low, info.',
+      'Allowed categories: security, test-coverage, code-quality, config, performance, documentation.',
+      'If no actionable issues were found, output: ```json\n[]\n```',
+      'Do NOT output findings as prose or bullet lists. Only the JSON array will be parsed.',
+    ].join('\n')
+  }
+
   const team = orchestrator.createTeam('pr-review', {
     name: 'pr-review',
     agents: createReviewAgentConfigs({

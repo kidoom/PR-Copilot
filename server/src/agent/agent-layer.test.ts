@@ -78,7 +78,7 @@ describe('PR review agent layer', () => {
       reviewPackage,
     })
 
-    expect(PR_REVIEW_COORDINATOR_PROMPT).toContain('dependency-aware DAG')
+    expect(PR_REVIEW_COORDINATOR_PROMPT).toContain('Task Decomposition')
     expect(PR_REVIEW_COORDINATOR_PROMPT).toContain('JSON array of findings')
     expect(prompt).toContain('owner/repo#1')
     expect(prompt).toContain('Token-aware review package')
