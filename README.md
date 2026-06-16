@@ -1,218 +1,121 @@
 # PR Copilot
 
-AI 驱动的 Pull Request 代码审查助手。
+PR Copilot is an AI-powered pull request review assistant. It fetches GitHub PR metadata and diffs, builds deterministic review context, packages PR evidence into token-aware reviewer scopes, runs an Open Multi-Agent (OMA) review team, and streams structured findings to a React frontend over WebSocket.
 
-PR Copilot 接收一个 GitHub PR 链接，自动获取 PR 元数据和代码变更，构建分析上下文（文件分类、优先级评分、Hunk 解析），通过 AI Agent 流水线进行多维度代码审查，并将审查结果实时推送到 Web 前端。
+## Stack
 
-## 功能特性
+| Layer | Technology |
+| --- | --- |
+| Backend | TypeScript, Express, Open Multi-Agent, Octokit |
+| Frontend | React, TypeScript, Vite, Tailwind CSS |
+| Streaming | WebSocket events with replay by sequence |
+| Storage | JSON session store under `PR_COPILOT_STORAGE_DIR` |
+| LLM | OpenAI-compatible API via `OPENAI_*` env vars |
 
-- 🔍 **智能代码分析** — 自动解析 PR diff，识别关键变更文件并进行优先级排序
-- 🤖 **AI Agent 流水线** — 多个专业子 Agent 并行审查（安全、测试、配置等维度）
-- 📡 **实时流式推送** — 通过 WebSocket 实时展示 Agent 思考过程和工具调用
-- 📊 **结构化审查报告** — 生成包含证据引用的结构化 Finding，支持置信度评估
-- 🔐 **GitHub App 集成** — 支持 GitHub App OAuth 认证，安全访问仓库
+## Project Structure
 
-## 技术栈
-
-| 层级 | 技术 |
-|------|------|
-| **后端** | Python 3.10+ / FastAPI / httpx |
-| **前端** | React 19 / TypeScript / Vite / Tailwind CSS |
-| **通信** | REST API + WebSocket |
-| **AI** | OpenAI 兼容 API（支持自定义端点） |
-
-## 项目结构
-
-```
+```text
 PR-Copilot/
-├── backend/                    # FastAPI 后端应用
-│   ├── api/routes/             # HTTP 和 WebSocket 路由处理器
-│   │   ├── pr_context.py       # PR 上下文 CRUD
-│   │   ├── review.py           # 静态审查流水线
-│   │   ├── review_runs.py      # 异步 AI 审查任务管理
-│   │   └── review_ws.py        # WebSocket 事件流
-│   ├── domain/                 # 业务逻辑层
-│   │   ├── github/             # GitHub API 客户端与认证
-│   │   └── review/             # PR 上下文构建、文件分析、证据规则
-│   ├── agent/                  # AI Agent 运行时
-│   │   ├── runtime/            # Agent 主循环、结果组装、上下文压缩
-│   │   ├── model/              # LLM 客户端封装
-│   │   ├── tools/              # 仓库上下文工具（文件读取、搜索）
-│   │   └── subagents.py        # 专业子 Agent 编排
-│   ├── storage/                # 会话持久化与存储
-│   ├── main.py                 # FastAPI 应用入口
-│   └── deps.py                 # 依赖注入与初始化
-├── frontend/                   # React 前端应用
-│   └── src/
-│       ├── api.ts              # API 客户端
-│       ├── types.ts            # TypeScript 类型定义
-│       └── components/
-│           ├── ReviewPanel.tsx  # 主审查工作台
-│           ├── FindingCard.tsx  # 审查发现卡片
-│           └── TerminalStream.tsx # 实时 Agent 输出流
-├── docs/                       # 项目文档
-├── deploy/                     # 部署配置
-└── package.json                # 根项目脚本（同时启动前后端）
+├── server/                  # TypeScript backend
+│   ├── src/github/          # GitHub PR metadata, diffs, checks
+│   ├── src/review/          # Static review pipeline
+│   ├── src/agent/           # OMA team, tools, compression, run orchestration
+│   ├── src/ws/              # WebSocket subscriptions and replay
+│   └── src/store/           # JSON persistence
+├── frontend/                # React review workbench
+├── docs/                    # Design and project notes
+├── openspec/                # OpenSpec changes
+└── package.json             # Root dev scripts
 ```
 
-## 快速开始
+The previous Python FastAPI backend has been removed. Use `server/` for all backend work.
 
-### 环境要求
+## Review Architecture
 
-- Python 3.10+
-- Node.js 18+
-- OpenAI 兼容 API 密钥
+The backend uses a package-first review pipeline so OMA agents can run with bounded context:
 
-### 1. 克隆项目
+1. Static review classifies changed files, scores priority, and extracts evidence signals.
+2. A token-aware review package keeps compact diff slices for the highest-priority files and records omitted files explicitly.
+3. Each reviewer gets an independent scope with allowed files, search scopes, and tool budgets.
+4. Repo tools enforce those scopes in code, so agents cannot broaden into full-repository reads by prompt alone.
+5. The coordinator synthesizes scoped reviewer outputs into structured findings.
 
-```bash
-git clone https://github.com/your-org/pr-copilot.git
-cd pr-copilot
-```
+Keep `PR_COPILOT_REVIEW_MAX_CONCURRENCY=1` for conservative providers. Raise it cautiously after confirming the selected model can handle the scoped parallel request load.
 
-### 2. 配置环境变量
+## Quick Start
 
-创建 `.env.local` 文件：
+Create `.env.local` in the repository root:
 
 ```env
 OPENAI_API_KEY=your-api-key
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_MODEL=gpt-4o
-
-# 可选：GitHub App 配置（用于仓库访问和 Checks）
-GITHUB_APP_CLIENT_ID=your-client-id
-GITHUB_APP_CLIENT_SECRET=your-client-secret
-PR_COPILOT_GITHUB_TOKEN=your-github-token
-
-# 可选：存储目录（默认 ~/.pr-copilot）
-PR_COPILOT_STORAGE_DIR=./data
+GITHUB_TOKEN=your-github-token
+PORT=8000
+PR_COPILOT_STORAGE_DIR=~/.pr-copilot
+PR_COPILOT_REVIEW_MAX_CONCURRENCY=1
 ```
 
-### 3. 安装依赖
+Install dependencies:
 
 ```bash
-# 后端依赖
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install -r backend/requirements.txt
-
-# 前端依赖
-cd frontend && npm install && cd ..
+npm install
+npm install --prefix server
+npm install --prefix frontend
 ```
 
-### 4. 启动开发服务器
+Run both backend and frontend:
 
 ```bash
-# 同时启动后端 + 前端
 npm run dev
-
-# 或分别启动
-npm run dev:backend  # 后端 localhost:8001
-npm run dev:frontend # 前端 localhost:5173
 ```
 
-访问 `http://localhost:5173` 即可使用。
-
-## API 使用示例
-
-### 创建 PR 上下文
+Run separately:
 
 ```bash
-curl -X POST http://localhost:8001/api/pr/context \
+npm run dev:server
+npm run dev:frontend
+```
+
+Frontend: `http://localhost:5173`  
+Backend: `http://localhost:8000`
+
+## API Smoke
+
+```bash
+curl -X POST http://localhost:8000/api/pr/context \
   -H "Content-Type: application/json" \
-  -d '{"pr_url": "https://github.com/OWNER/REPO/pull/NUMBER"}'
+  -d "{\"pr_url\":\"https://github.com/OWNER/REPO/pull/NUMBER\"}"
 ```
 
-### 启动 AI 审查
-
 ```bash
-curl -X POST http://localhost:8001/api/review/runs \
+curl -X POST http://localhost:8000/api/review/runs \
   -H "Content-Type: application/json" \
-  -d '{"context_id": "CONTEXT_ID"}'
+  -d "{\"context_id\":\"CONTEXT_ID\",\"pr_context\":{...}}"
 ```
 
-### WebSocket 连接
+WebSocket:
 
-```javascript
-const ws = new WebSocket('ws://localhost:8001/ws/review-runs/RUN_ID');
-ws.onmessage = (event) => {
-  const data = JSON.parse(event.data);
-  // data.type: 'message_delta' | 'tool_call' | 'finding' | 'terminal'
-};
+```js
+const ws = new WebSocket("ws://localhost:8000/ws/review-runs/RUN_ID")
 ```
 
-更多 API 细节请参考 [API.md](API.md)。
+Events use:
 
-## 工作流程
-
-```
-用户输入 PR URL
-       ↓
-┌─────────────────────────────────┐
-│   1. 获取 PR 元数据与文件列表    │
-│   2. 构建分析上下文              │
-│      - 文件分类                  │
-│      - 优先级评分                │
-│      - Hunk 解析                │
-└─────────────────────────────────┘
-       ↓
-┌─────────────────────────────────┐
-│   3. 静态分析（并行）            │
-│      - Intake Analysis          │
-│      - Evidence Rules           │
-│      - Context Task Planning    │
-└─────────────────────────────────┘
-       ↓
-┌─────────────────────────────────┐
-│   4. AI Agent 流水线             │
-│      - 安全审查子 Agent          │
-│      - 测试上下文子 Agent        │
-│      - 配置审查子 Agent          │
-│      - ...更多专业 Agent         │
-└─────────────────────────────────┘
-       ↓
-┌─────────────────────────────────┐
-│   5. 结果组装与验证              │
-│      - 证据关联                  │
-│      - 置信度评估                │
-│      - 结构化输出                │
-└─────────────────────────────────┘
-       ↓
-   实时推送到前端
+```json
+{ "event_id": "...", "run_id": "...", "type": "run.completed", "sequence": 1, "created_at": "...", "payload": {} }
 ```
 
-## 测试
+## Verification
 
 ```bash
-# 运行所有测试
-python -m pytest backend/tests/ -v
-
-# 运行特定测试文件
-python -m pytest backend/tests/test_api/routes/test_review.py -v
-
-# 运行前端 lint
-cd frontend && npm run lint
+cd server && npm test
+cd server && npm run lint
+cd frontend && npm run build
 ```
 
-## 环境变量参考
+## Git Workflow
 
-| 变量 | 必填 | 说明 |
-|------|------|------|
-| `OPENAI_API_KEY` | ✅ | LLM API 密钥 |
-| `OPENAI_BASE_URL` | ❌ | OpenAI 兼容 API 端点（默认: `https://api.openai.com/v1`） |
-| `OPENAI_MODEL` | ❌ | 模型名称（默认: `gpt-4o`） |
-| `GITHUB_APP_CLIENT_ID` | ❌ | GitHub App Client ID |
-| `GITHUB_APP_CLIENT_SECRET` | ❌ | GitHub App Client Secret |
-| `PR_COPILOT_GITHUB_TOKEN` | ❌ | 服务端 GitHub Token |
-| `PR_COPILOT_STORAGE_DIR` | ❌ | Agent 内存和临时工作区根目录（默认: `~/.pr-copilot`） |
-| `PR_COPILOT_CORS_ORIGINS` | ❌ | 额外的 CORS 允许源（逗号分隔） |
-
-## 开发指南
-
-- **main 分支**：禁止直接推送，所有变更通过 PR 提交团队审查
-- **Liziark 分支**：允许直接推送，新功能先在此开发，再 PR 到 main
-- PR 描述需包含：变更内容、实现功能、修复问题、测试覆盖、验证方式
-
-## 许可证
-
-[Apache License 2.0](LICENSE)
+- `main`: never push directly. Use PRs and team review.
+- `Liziark`: direct push is allowed. Develop here first, then open a PR to `main`.
+- PR descriptions must include what changed, what was implemented, what was fixed, tests, and verification.
