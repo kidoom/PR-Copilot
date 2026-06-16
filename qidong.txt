@@ -1,7 +1,2 @@
- cd D:\PR-Copilot
-  python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
-
-  前端：
-
-  cd D:\PR-Copilot\frontend
-  npm run dev
+cd D:\PR-Copilot
+npm run dev

@@ -1,99 +1,99 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with this repository.
 
 ## Project Overview
 
-PR Copilot is an AI-powered pull request review assistant. It takes a GitHub PR URL, fetches PR metadata and diffs via the GitHub API, builds analysis context (file classification, priority scoring, hunk parsing), runs an AI agent pipeline with specialized sub-agents for code review, and streams findings to a web frontend via WebSocket.
+PR Copilot is an AI-powered pull request review assistant. It takes a GitHub PR URL, fetches PR metadata and diffs via GitHub API, builds deterministic review context, packages PR evidence into token-aware reviewer scopes, runs an Open Multi-Agent (OMA) review team, and streams findings to a React frontend over WebSocket.
 
 ## Commands
 
 ```bash
-# Run both backend + frontend concurrently
+# Run TypeScript backend + frontend concurrently
 npm run dev
 
-# Backend only (FastAPI on port 8000)
+# TypeScript backend only (Express + OMA on port 8000)
+npm run dev:server
 npm run dev:backend
 
 # Frontend only (Vite dev server)
 npm run dev:frontend
 
-# Build frontend (TypeScript compile + Vite production build)
+# Server checks
+cd server && npm test
+cd server && npm run lint
+cd server && npm run build
+
+# Frontend checks
 cd frontend && npm run build
-
-# Lint frontend
 cd frontend && npm run lint
-
-# Run all backend tests
-python -m pytest backend/tests/ -v
-
-# Run a single test file
-python -m pytest backend/tests/test_api/routes/test_review.py -v
-
-# Run a single test function
-python -m pytest backend/tests/test_api/routes/test_review.py::test_function_name -v
 ```
 
 ## Architecture
 
-### Backend (Python / FastAPI)
+### Backend (TypeScript / Express / OMA)
 
-The backend lives in `backend/` and follows a layered architecture:
+The active backend lives in `server/`:
 
-- **`backend/api/routes/`** — HTTP and WebSocket route handlers. Key files: `pr_context.py` (PR context CRUD), `review.py` (static review pipeline), `review_runs.py` (async AI review runs), `review_ws.py` (WebSocket event streaming), `github_auth.py` (GitHub App OAuth).
+- `server/src/index.ts`: Express app entry point, CORS, REST routes, WebSocket server.
+- `server/src/config.ts`: environment loading.
+- `server/src/github/`: Octokit integration for PR metadata, file diffs, commits, and Checks API.
+- `server/src/review/`: static review pipeline for file classification, priority scoring, evidence rules, context task planning, and token-aware review packaging.
+- `server/src/agent/`: OMA review team, coordinator prompt, specialized agents, repo tools, context compression, and `runReview()`.
+- `server/src/agent/tools/`: OMA `defineTool()` repo-context tools with path safety, sensitive-file filtering, per-reviewer scope enforcement, and budgets.
+- `server/src/agent/compression/`: CJK-aware token estimation, micro-compact, repair, auto-compact, recent selection, and custom OMA `ContextStrategy`.
+- `server/src/ws/`: WebSocket subscription, event replay, and event-log persistence.
+- `server/src/store/`: JSON session store for PR contexts, review runs, and event logs.
 
-- **`backend/domain/`** — Business logic. `github/` handles GitHub API client and auth. `review/` contains the PR context builder, intake analysis, file prioritization, evidence rules, and context task planning.
+### Removed Python Backend
 
-- **`backend/agent/`** — AI agent runtime. `runtime/` has the main agent loop, final result assembly, and runner compression. `model/` wraps the OpenAI-compatible LLM client. `tools/` registers repo-context tools (file reading, searching, workspace management). `memory.py` provides file-based session memory. `subagents.py` orchestrates specialized review sub-agents.
-
-- **`backend/main.py`** — FastAPI app entry point, mounts routes and CORS.
+The previous Python FastAPI backend has been removed. Do not add new backend features under `backend/`; the active backend is `server/`. The root `npm run dev` path starts the TypeScript backend and frontend.
 
 ### Frontend (React / TypeScript / Vite)
 
 The frontend lives in `frontend/src/`:
 
-- **`api.ts`** — API client for all HTTP calls to the backend.
-- **`types.ts`** — TypeScript type definitions matching backend contracts.
-- **`components/`** — React components. `ReviewPanel.tsx` is the main review workbench. `FindingCard.tsx` renders individual review findings. `TerminalStream.tsx` shows real-time agent output.
+- `api.ts`: compatibility client for TS backend responses and legacy frontend shapes.
+- `types.ts`: TypeScript API and UI contracts.
+- `components/ReviewPanel.tsx`: review run control, polling fallback, and event handling.
+- `components/FindingCard.tsx`: rendered review findings.
+- `components/TerminalStream.tsx`: live agent event stream.
 
-### Communication
+## API And Streaming
 
-- REST API at `/api/*` — proxied from Vite dev server to backend at `localhost:8000`.
-- WebSocket at `/ws/*` — real-time streaming of agent events (message deltas, tool calls, sub-agent progress, terminal results). Events include a `sequence` field for client-side ordering and deduplication.
+- REST API: `/api/*`, proxied by Vite to `localhost:8000`.
+- WebSocket: `/ws/review-runs/:run_id`, supports `?after_sequence=N` replay.
+- Event format: `{ event_id, run_id, type, sequence, created_at, payload }`.
+- Terminal events: `run.completed`, `run.failed`, `run.cancelled`.
 
-### Agent Pipeline Flow
+## Agent Pipeline
 
-1. Frontend creates a PR Context (`POST /api/pr/context`) — fetches PR metadata and file list from GitHub.
-2. Static review pipeline runs in parallel: intake analysis, file prioritization, evidence rules, context task planning.
-3. User starts an AI Review Run (`POST /api/review/runs`) — returns immediately with a `run_id`.
-4. Frontend connects WebSocket (`WS /ws/review-runs/{run_id}`) for real-time streaming.
-5. Backend runs the main agent loop with sub-agents (security, test context, config, etc.) that explore the repo and produce structured findings.
-6. Terminal event carries the final `findings[]` array. Frontend also polls `GET /api/review/runs/{run_id}` after WebSocket closes for the canonical result.
-
-### Key Design Decisions
-
-- **Stateless context**: `context_id` and `run_id` are stored in memory. Backend restart invalidates all existing IDs.
-- **Agent compression**: The agent runtime uses context compression strategies (compact, micro-compact, recent, repair) to stay within token limits during long review runs.
-- **Evidence vs Findings**: Static rules produce `evidence` (deterministic signals). AI agents produce `findings` (claims with evidence references). Only findings with validated evidence reach the final result.
-- **GitHub App auth**: Uses PKCE-based OAuth flow. Browser gets HttpOnly session cookies; backend holds the user access token. `/api/auth/*` and `/api/health` are unauthenticated; all other `/api/*` and WebSocket endpoints require a valid session.
+1. Frontend creates a PR context with `POST /api/pr/context`.
+2. Server fetches PR metadata/diffs and persists the context.
+3. Static review produces classifications, evidence signals, and context tasks.
+4. `buildReviewPackage()` creates compact diff slices and per-reviewer scopes.
+5. Frontend starts a review run with `POST /api/review/runs`.
+6. `runReview()` creates the OMA team and runs the Coordinator DAG.
+7. Specialized agents use scoped read-only repo tools, per-agent budgets, and per-agent compression.
+8. WebSocket events stream progress and terminal findings.
+9. Review runs and events are persisted for polling and reconnect replay.
 
 ## Environment Variables
 
-Environment is loaded from `.env.local` (gitignored). Key variables:
-
 | Variable | Purpose |
 |---|---|
+| `PORT` | TS backend port, default `8000` |
 | `OPENAI_API_KEY` | LLM API key |
 | `OPENAI_BASE_URL` | OpenAI-compatible API endpoint |
-| `OPENAI_MODEL` | Model name (default: `gpt-4o`) |
-| `GITHUB_APP_CLIENT_ID` | GitHub App Client ID |
-| `GITHUB_APP_CLIENT_SECRET` | GitHub App Client Secret |
-| `PR_COPILOT_GITHUB_TOKEN` | Server-side GitHub token for repo access and Checks |
-| `PR_COPILOT_STORAGE_DIR` | Agent memory and temp workspace root (default: `~/.pr-copilot`) |
-| `PR_COPILOT_LOCAL_REPO_ROOT` | Local repo path for development debugging |
+| `OPENAI_MODEL` | Model name, default `gpt-4o` |
+| `GITHUB_TOKEN` | GitHub token fallback |
+| `GITHUB_APP_ID` | GitHub App ID |
+| `GITHUB_APP_PRIVATE_KEY` | GitHub App private key |
+| `PR_COPILOT_STORAGE_DIR` | JSON session/event storage root, default `~/.pr-copilot` |
+| `PR_COPILOT_REVIEW_MAX_CONCURRENCY` | OMA review task concurrency, default `1`; increase only if the model provider tolerates parallel large-context calls |
 
 ## Git Workflow
 
-- **main branch**: Never push directly. All changes go through PRs with team review.
-- **Liziark branch**: Direct push allowed. Development happens here first, then PR to main.
+- `main`: never push directly. Use PRs and team review.
+- `Liziark`: direct push is allowed. Develop here first, then open a PR to `main`.
 - PR descriptions must include: what changed, what was implemented, what was fixed, test coverage, and verification method.

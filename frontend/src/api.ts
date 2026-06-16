@@ -7,6 +7,7 @@ import type {
 } from "./types"
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "")
+const rawContextCache = new Map<string, unknown>()
 
 function apiUrl(path: string): string {
   return `${API_BASE}${path}`
@@ -50,8 +51,82 @@ function asStringArray(value: unknown): string[] {
     : []
 }
 
+function categoryFor(filename: string): string {
+  if (/(^|\/)(tests?|__tests__|spec)\//i.test(filename) || /\.(test|spec)\./i.test(filename)) return "test"
+  if (/(^|\/)\.github\/workflows\//i.test(filename)) return "ci"
+  if (/(^|\/)docs?\//i.test(filename) || /\.(md|rst|txt)$/i.test(filename)) return "doc"
+  if (/(^|\/)(package\.json|tsconfig\.json|vite\.config|webpack\.config)/i.test(filename)) return "config"
+  return "source"
+}
+
+function languageFor(filename: string): string {
+  const ext = filename.split(".").pop()?.toLowerCase()
+  const map: Record<string, string> = {
+    ts: "TypeScript",
+    tsx: "TypeScript",
+    js: "JavaScript",
+    jsx: "JavaScript",
+    py: "Python",
+    md: "Markdown",
+    json: "JSON",
+    yml: "YAML",
+    yaml: "YAML",
+  }
+  return ext ? map[ext] || ext.toUpperCase() : "Unknown"
+}
+
 function normalizePrContextResponse(value: unknown): PrContextResponse {
   const root = asRecord(value)
+  if (!root.pr) {
+    const files = Array.isArray(root.files) ? root.files : []
+    const normalizedFiles = files.map((item) => {
+      const file = asRecord(item)
+      const filename = asString(file.filename, "unknown file")
+      const category = categoryFor(filename)
+      const riskHints = /auth|security|permission|token|secret/i.test(filename)
+        ? ["high_risk_path"]
+        : []
+
+      return {
+        filename,
+        status: asString(file.status, "modified"),
+        additions: asNumber(file.additions),
+        deletions: asNumber(file.deletions),
+        language: languageFor(filename),
+        language_family: languageFor(filename).toLowerCase(),
+        is_test: category === "test",
+        is_docs: category === "doc",
+        is_config: category === "config" || category === "ci",
+        is_source: category === "source",
+        is_binary: asBoolean(file.is_binary, file.patch_available === false),
+        is_high_risk_path: riskHints.length > 0,
+        risk_hints: riskHints,
+        priority_score_hint: riskHints.length > 0 ? 80 : category === "source" ? 60 : 20,
+      }
+    })
+
+    return {
+      context_id: asString(root.context_id),
+      pr: {
+        title: asString(root.title, "Untitled pull request"),
+        author: asString(root.author, "Unknown author"),
+        url: `https://github.com/${asString(root.owner)}/${asString(root.repo)}/pull/${asNumber(root.pull_number)}`,
+        base_branch: asString(root.base_branch, "base"),
+        head_branch: asString(root.head_branch, "head"),
+        additions: normalizedFiles.reduce((sum, file) => sum + file.additions, 0),
+        deletions: normalizedFiles.reduce((sum, file) => sum + file.deletions, 0),
+        changed_files: normalizedFiles.length,
+        head_sha: asString(root.head_sha),
+      },
+      files: normalizedFiles,
+      derived: {
+        docs_only: normalizedFiles.length > 0 && normalizedFiles.every((file) => file.is_docs),
+        has_source_without_tests: normalizedFiles.some((file) => file.is_source) && !normalizedFiles.some((file) => file.is_test),
+        high_risk_files: normalizedFiles.filter((file) => file.is_high_risk_path).map((file) => file.filename),
+      },
+    }
+  }
+
   const pr = asRecord(root.pr)
   const derived = asRecord(root.derived)
   const files = Array.isArray(root.files) ? root.files : []
@@ -123,7 +198,53 @@ export async function analyzePr(prUrl: string): Promise<PrContextResponse> {
     await throwApiError(res, `Request failed: ${res.status}`)
   }
 
-  return normalizePrContextResponse(await res.json())
+  const raw = await res.json()
+  const normalized = normalizePrContextResponse(raw)
+  rawContextCache.set(normalized.context_id, raw)
+  return normalized
+}
+
+function normalizeFinding(value: unknown, index: number) {
+  const finding = asRecord(value)
+  const title = asString(finding.title, "Review finding")
+  const description = asString(finding.description)
+  const file = asString(finding.file)
+  const line = typeof finding.line === "number" ? finding.line : undefined
+  const evidence = Array.isArray(finding.evidence) ? finding.evidence.map((item) => {
+    const ref = asRecord(item)
+    return {
+      file: asString(ref.file, file),
+      line: typeof ref.line === "number" ? ref.line : undefined,
+      snippet: asString(ref.snippet),
+      source: asString(ref.tool, asString(ref.source, "agent")),
+    }
+  }) : []
+
+  return {
+    claim: title || description,
+    confidence: 0.8,
+    severity: asString(finding.severity, "info") as "informational" | "info" | "low" | "medium" | "high" | "critical",
+    evidence,
+    fingerprint: `${file}:${line ?? 0}:${title}:${index}`,
+    suggestion: asString(finding.suggestion),
+  }
+}
+
+function normalizeFinalResultPayload(payload: unknown) {
+  const root = asRecord(payload)
+  const findings = Array.isArray(root.findings) ? root.findings.map(normalizeFinding) : []
+  return {
+    status: asString(root.status, "completed"),
+    summary: asString(root.summary, findings.length ? `${findings.length} findings` : "No findings"),
+    findings,
+    uncertainties: [],
+    notes: [],
+    task_summaries: [],
+    raw_output: JSON.stringify(root),
+    steps: Array.isArray(root.tasks) ? root.tasks.length : 0,
+    stopped_by_max_steps: false,
+    token_usage: { input_tokens: 0, output_tokens: 0 },
+  }
 }
 
 export async function getIntakeSummary(contextId: string): Promise<IntakeSummary> {
@@ -162,11 +283,19 @@ export async function createReviewRun(
   contextId: string,
   localRepoRoot?: string,
 ): Promise<{ run_id: string; status: string }> {
+  if (!rawContextCache.has(contextId)) {
+    const contextRes = await fetch(apiUrl(`/api/pr/context/${encodeURIComponent(contextId)}`))
+    if (contextRes.ok) {
+      rawContextCache.set(contextId, await contextRes.json())
+    }
+  }
+
   const res = await fetch(apiUrl("/api/review/runs"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       context_id: contextId,
+      pr_context: rawContextCache.get(contextId),
       local_repo_root: localRepoRoot || undefined,
     }),
   })
@@ -174,7 +303,8 @@ export async function createReviewRun(
     const body = await res.json().catch(() => ({ detail: "Unknown error" }))
     throw new Error(body.detail || `Request failed: ${res.status}`)
   }
-  return res.json()
+  const body = await res.json()
+  return { run_id: asString(body.run_id), status: asString(body.status, "queued") }
 }
 
 export async function getReviewRun(
@@ -185,7 +315,14 @@ export async function getReviewRun(
     const body = await res.json().catch(() => ({ detail: "Unknown error" }))
     throw new Error(body.detail || `Request failed: ${res.status}`)
   }
-  return res.json()
+  const body = asRecord(await res.json())
+  return {
+    run_id: asString(body.run_id),
+    context_id: asString(body.context_id),
+    status: asString(body.status, "queued") as ReviewRunStatusResponse["status"],
+    final_result: Array.isArray(body.findings) ? normalizeFinalResultPayload(body) : undefined,
+    error_summary: asString(body.error),
+  }
 }
 
 export async function cancelReviewRun(
@@ -199,7 +336,8 @@ export async function cancelReviewRun(
     const body = await res.json().catch(() => ({ detail: "Unknown error" }))
     throw new Error(body.detail || `Request failed: ${res.status}`)
   }
-  return res.json()
+  const body = await res.json()
+  return { run_id: runId, status: asString(asRecord(body).status, "cancelled") }
 }
 
 export interface ReviewHistoryRun {
@@ -279,6 +417,9 @@ export function subscribeToReviewRun(
   ws.addEventListener("message", (msg) => {
     try {
       const data = JSON.parse(msg.data) as ReviewRunEvent
+      if (data.type === "run.completed") {
+        data.payload = normalizeFinalResultPayload(data.payload) as unknown as Record<string, unknown>
+      }
       onEvent(data)
       if (TERMINAL_EVENTS.has(data.type)) {
         receivedTerminalEvent = true
