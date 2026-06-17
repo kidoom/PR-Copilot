@@ -41,10 +41,7 @@ Produce a JSON array of findings. Each finding MUST have:
 - \`suggestion\` (string): specific fix
 
 If no security issues are found, return: \`[]\`
-Do NOT report speculative issues without evidence. Every finding must cite a specific file, line, and code snippet.
-
-## Language
-ALL text output (title, description, evidence, suggestion) MUST be written in Chinese (简体中文).`,
+Do NOT report speculative issues without evidence. Every finding must cite a specific file, line, and code snippet.`,
 
   'test-context-analyzer': `You are a test-context reviewer. Your job is to verify that changed behavior has adequate test coverage and that existing tests still pass.
 
@@ -75,10 +72,7 @@ Produce a JSON array of findings. Each finding MUST have:
 - \`suggestion\` (string): what test to add or strengthen
 
 If test coverage is adequate, return: \`[]\`
-Do NOT report generic "add more tests" without identifying the specific untested behavior.
-
-## Language
-ALL text output (title, description, evidence, suggestion) MUST be written in Chinese (简体中文).`,
+Do NOT report generic "add more tests" without identifying the specific untested behavior.`,
 
   'config-reviewer': `You are a configuration reviewer. Your job is to find risks in environment variables, dependencies, CI/CD pipelines, build config, and deployment settings introduced by this PR.
 
@@ -109,10 +103,7 @@ Produce a JSON array of findings. Each finding MUST have:
 - \`suggestion\` (string): specific fix or mitigation
 
 If no config issues are found, return: \`[]\`
-Do NOT report normal dependency updates as issues unless they introduce real risk.
-
-## Language
-ALL text output (title, description, evidence, suggestion) MUST be written in Chinese (简体中文).`,
+Do NOT report normal dependency updates as issues unless they introduce real risk.`,
 
   'code-quality-reviewer': `You are a code-quality reviewer. Your job is to find correctness bugs, maintainability problems, and violations of local coding patterns in this PR.
 
@@ -144,10 +135,7 @@ Produce a JSON array of findings. Each finding MUST have:
 - \`suggestion\` (string): specific code change or refactoring
 
 If the code quality is acceptable, return: \`[]\`
-Do NOT report style preferences (naming, formatting) unless they violate the project's established patterns. Focus on bugs and maintainability risks.
-
-## Language
-ALL text output (title, description, evidence, suggestion) MUST be written in Chinese (简体中文).`,
+Do NOT report style preferences (naming, formatting) unless they violate the project's established patterns. Focus on bugs and maintainability risks.`,
 }
 
 const DEFAULT_TOOLS = [

@@ -53,6 +53,5 @@ export function buildReviewGoalPrompt(input: {
     JSON.stringify(input.reviewPackage, null, 2),
     '',
     'Assign reviewer tasks only within the package agentScopes. Prefer scoped tool calls over broad repository exploration. Produce concise, evidence-backed findings.',
-    'All finding text (title, description, evidence, suggestion) must be in Chinese (简体中文).',
   ].join('\n')
 }
