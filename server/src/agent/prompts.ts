@@ -33,7 +33,10 @@ Allowed categories: security, test-coverage, code-quality, config, performance, 
 
 If sub-agents returned findings in their own JSON arrays, merge them into the final array.
 If there are no actionable issues, return: \`\`\`json\n[]\n\`\`\`
-Do NOT return findings as prose. Only the JSON array will be parsed by the system.`
+Do NOT return findings as prose. Only the JSON array will be parsed by the system.
+
+## Language
+ALL text output (title, description, evidence, suggestion) MUST be written in Chinese (简体中文).`
 
 export function buildReviewGoalPrompt(input: {
   goal: string

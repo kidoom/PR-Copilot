@@ -77,6 +77,7 @@ export async function createReviewTeam(input: ReviewTeamInput): Promise<ReviewTe
       'Allowed categories: security, test-coverage, code-quality, config, performance, documentation.',
       'If no actionable issues were found, output: ```json\n[]\n```',
       'Do NOT output findings as prose or bullet lists. Only the JSON array will be parsed.',
+      'ALL text (title, description, evidence, suggestion) MUST be written in Chinese (简体中文).',
     ].join('\n')
   }
 
