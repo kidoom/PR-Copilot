@@ -128,19 +128,98 @@ function parseFindingsFromText(text: string): ReviewFinding[] {
   return []
 }
 
+/**
+ * Fallback parser for when the LLM returns findings as markdown prose
+ * instead of a JSON array. Looks for structured patterns like:
+ *   **File:** path/to/file.ts
+ *   **Severity:** high
+ *   **Title:** Some issue
+ *   **Description:** ...
+ */
+function parseFindingsFromMarkdown(text: string): ReviewFinding[] {
+  const findings: ReviewFinding[] = []
+  // Split by markdown heading or horizontal rule boundaries
+  const blocks = text.split(/(?=###?\s)|(?:\n---+\n)/)
+
+  for (const block of blocks) {
+    const fileMatch = block.match(/\*\*File:?\*\*\s*`?([^\s`*][^\n`]*?)`?\s*$/im)
+    const titleMatch = block.match(/\*\*Title:?\*\*\s*`?(.+?)`?\s*$/im)
+      ?? block.match(/\*\*Finding:?\*\*\s*`?(.+?)`?\s*$/im)
+      ?? block.match(/\*\*Issue:?\*\*\s*`?(.+?)`?\s*$/im)
+    const descMatch = block.match(/\*\*Description:?\*\*\s*`?(.+?)`?\s*$/im)
+      ?? block.match(/\*\*Details:?\*\*\s*`?(.+?)`?\s*$/im)
+    const sevMatch = block.match(/\*\*Severity:?\*\*\s*`?(\w+)`?\s*$/im)
+    const catMatch = block.match(/\*\*Category:?\*\*\s*`?([\w-]+)`?\s*$/im)
+    const lineMatch = block.match(/\*\*Line:?\*\*\s*`?(\d+)`?\s*$/im)
+    const suggMatch = block.match(/\*\*(?:Suggestion|Recommendation|Fix):?\*\*\s*`?(.+?)`?\s*$/im)
+
+    if (fileMatch && (titleMatch || descMatch)) {
+      const finding = coerceFinding({
+        file: fileMatch[1].trim(),
+        line: lineMatch ? Number.parseInt(lineMatch[1], 10) : undefined,
+        severity: sevMatch ? sevMatch[1].trim() : 'info',
+        category: catMatch ? catMatch[1].trim() : 'code-quality',
+        title: titleMatch ? titleMatch[1].trim() : descMatch![1].trim().slice(0, 80),
+        description: descMatch ? descMatch[1].trim() : titleMatch![1].trim(),
+        evidence: [],
+        suggestion: suggMatch ? suggMatch[1].trim() : undefined,
+      })
+      if (finding) findings.push(finding)
+    }
+  }
+
+  return findings
+}
+
 export function extractFindings(result: TeamRunResult): ReviewFinding[] {
   const coordinatorOutput = result.agentResults.get('coordinator')?.output
-  const outputs = [
-    coordinatorOutput,
-    ...[...result.agentResults.values()].map((agentResult) => agentResult.output),
-  ].filter((output): output is string => typeof output === 'string' && output.length > 0)
 
-  for (const output of outputs) {
-    const findings = parseFindingsFromText(output)
+  // 1. Try coordinator output first — it should contain the synthesised findings.
+  if (coordinatorOutput && typeof coordinatorOutput === 'string' && coordinatorOutput.length > 0) {
+    const findings = parseFindingsFromText(coordinatorOutput)
     if (findings.length > 0) return findings
   }
 
-  return []
+  // 2. Coordinator returned no JSON findings (prose summary or empty []).
+  //    Aggregate findings from individual sub-agent outputs.
+  const aggregated: ReviewFinding[] = []
+  const seen = new Set<string>()
+
+  for (const [, agentResult] of result.agentResults) {
+    if (!agentResult.output || typeof agentResult.output !== 'string' || agentResult.output.length === 0) continue
+    // Skip the coordinator's own output — already tried above.
+    if (agentResult === result.agentResults.get('coordinator')) continue
+
+    const findings = parseFindingsFromText(agentResult.output)
+    for (const finding of findings) {
+      const key = `${finding.file}:${finding.line ?? 0}:${finding.title}`
+      if (!seen.has(key)) {
+        seen.add(key)
+        aggregated.push(finding)
+      }
+    }
+  }
+
+  if (aggregated.length > 0) return aggregated
+
+  // 3. Last resort: try markdown fallback on all outputs.
+  const allOutputs = [
+    coordinatorOutput,
+    ...[...result.agentResults.values()].map((r) => r.output),
+  ].filter((output): output is string => typeof output === 'string' && output.length > 0)
+
+  for (const output of allOutputs) {
+    const findings = parseFindingsFromMarkdown(output)
+    for (const finding of findings) {
+      const key = `${finding.file}:${finding.line ?? 0}:${finding.title}`
+      if (!seen.has(key)) {
+        seen.add(key)
+        aggregated.push(finding)
+      }
+    }
+  }
+
+  return aggregated
 }
 
 export async function runReview(input: RunReviewInput): Promise<RunReviewResult> {
@@ -209,7 +288,9 @@ export async function runReview(input: RunReviewInput): Promise<RunReviewResult>
     return { findings, tasks: raw.tasks ?? [], raw }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    emit(makeRunEvent(input.runId, 'run.failed', sequence++, { error: message }))
+    if (!input.abortSignal?.aborted) {
+      emit(makeRunEvent(input.runId, 'run.failed', sequence++, { error: message }))
+    }
     throw error
   } finally {
     await runtime.orchestrator.shutdown()
