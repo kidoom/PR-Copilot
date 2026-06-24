@@ -1,4 +1,5 @@
-# PR Copilot
+# PR Copilot 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/kidoom/PR-Copilot)
 
 PR Copilot is an AI-powered pull request review assistant. It fetches GitHub PR metadata and diffs, builds deterministic review context, packages PR evidence into token-aware reviewer scopes, runs an Open Multi-Agent (OMA) review team, and streams structured findings to a React frontend over WebSocket.
 
