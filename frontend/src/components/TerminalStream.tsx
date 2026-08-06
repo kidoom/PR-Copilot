@@ -84,10 +84,28 @@ function formatSummary(value: unknown, max = 120): string {
   return text.length > max ? `${text.slice(0, max)}...` : text
 }
 
-function toolIcon(name: string) {
-  if (name.includes("search") || name.includes("Search")) return Search
-  if (name.includes("read") || name.includes("Read")) return FileText
-  return Wrench
+function formatToolResult(tool: ToolEventPayload): string {
+  const raw = tool.output_summary
+  if (raw == null || raw === "") return ""
+  try {
+    const parsed = typeof raw === "string" ? JSON.parse(raw) as Record<string, unknown> : raw as Record<string, unknown>
+    const error = typeof parsed.error === "string" ? parsed.error : ""
+    const status = typeof parsed.status === "string" ? parsed.status : ""
+    const path = typeof parsed.path === "string" ? parsed.path : ""
+    return [error, status, path].filter(Boolean).join(" · ")
+  } catch {
+    return formatSummary(raw, 160)
+  }
+}
+
+function ToolIcon({ name }: { name: string }) {
+  if (name.includes("search") || name.includes("Search")) {
+    return <Search className="size-3 shrink-0" />
+  }
+  if (name.includes("read") || name.includes("Read")) {
+    return <FileText className="size-3 shrink-0" />
+  }
+  return <Wrench className="size-3 shrink-0" />
 }
 
 // ─── Phase detection ─────────────────────────────────────────────────
@@ -178,7 +196,7 @@ function PhaseStepper({ phase, elapsed }: { phase: Phase; elapsed: number }) {
   const currentIdx = PHASES.findIndex((p) => p.key === phase)
 
   return (
-    <div className="border-b bg-gradient-to-r from-slate-950 via-slate-900 to-slate-950 px-4 py-3">
+    <div className="border-b bg-muted/40 px-4 py-3">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1">
           {PHASES.map((p, idx) => {
@@ -188,15 +206,15 @@ function PhaseStepper({ phase, elapsed }: { phase: Phase; elapsed: number }) {
             return (
               <div key={p.key} className="flex items-center">
                 {idx > 0 && (
-                  <div className={`mx-1 h-px w-6 ${isDone ? "bg-emerald-500" : "bg-slate-700"}`} />
+                  <div className={`mx-1 h-px w-6 ${isDone ? "bg-primary" : "bg-border"}`} />
                 )}
                 <div
                   className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${
                     isActive
-                      ? "bg-sky-500/20 text-sky-300 ring-1 ring-sky-500/40"
+                      ? "bg-background text-foreground ring-1 ring-border"
                       : isDone
-                        ? "text-emerald-400"
-                        : "text-slate-500"
+                        ? "text-foreground"
+                        : "text-muted-foreground"
                   }`}
                 >
                   {isActive ? (
@@ -212,13 +230,34 @@ function PhaseStepper({ phase, elapsed }: { phase: Phase; elapsed: number }) {
             )
           })}
         </div>
-        <span className="font-mono text-[11px] text-slate-400">{formatElapsed(elapsed)}</span>
+        <span className="font-mono text-[11px] text-muted-foreground">{formatElapsed(elapsed)}</span>
       </div>
     </div>
   )
 }
 
 // ─── Live Activity Banner ────────────────────────────────────────────
+
+function BreathingActivity() {
+  return (
+    <div className="mt-3 flex items-center gap-2 rounded-lg border bg-muted/30 px-2.5 py-2">
+      <span className="relative flex size-2.5" aria-hidden="true">
+        <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary opacity-20 [animation-duration:1.8s]" />
+        <span className="relative inline-flex size-2.5 rounded-full bg-primary" />
+      </span>
+      <span className="text-[11px] text-muted-foreground">实时流处理中</span>
+      <span className="ml-auto flex items-center gap-1" aria-hidden="true">
+        {[0, 1, 2, 3].map((i) => (
+          <span
+            key={i}
+            className="size-1.5 animate-pulse rounded-full bg-primary/60 [animation-duration:1.8s]"
+            style={{ animationDelay: `${i * 220}ms` }}
+          />
+        ))}
+      </span>
+    </div>
+  )
+}
 
 function LiveActivity({
   phase,
@@ -232,56 +271,46 @@ function LiveActivity({
   const running = agents.find((a) => a.status === "running")
   const isTerminal = phase === "done"
 
-  let icon = <Loader2 className="h-4 w-4 animate-spin text-sky-400" />
+  let icon = <Loader2 className="size-4 animate-spin text-primary" />
   let label = "审查正在运行"
   let detail = ""
 
   if (phase === "planning") {
-    icon = <Brain className="h-4 w-4 text-purple-400" />
+    icon = <Brain className="size-4 text-primary" />
     label = "正在规划审查任务"
     detail = "协调器正在分析 PR 并分解审查任务..."
   } else if (phase === "executing") {
-    icon = <Zap className="h-4 w-4 text-amber-400" />
+    icon = <Zap className="size-4 text-primary" />
     label = running ? `${agentLabel(running.type)} 正在工作` : "正在执行审查任务"
     detail = running?.action || "多个智能体并行分析中..."
   } else if (phase === "synthesizing") {
-    icon = <FileText className="h-4 w-4 text-emerald-400" />
+    icon = <FileText className="size-4 text-primary" />
     label = "正在综合审查结果"
     detail = "协调器正在汇总所有发现并生成最终报告..."
   } else if (phase === "done") {
     if (latestEvent?.type === "run.failed") {
-      icon = <XCircle className="h-4 w-4 text-red-400" />
+      icon = <XCircle className="size-4 text-destructive" />
       label = "审查失败"
       detail = String(latestEvent.payload.error ?? "")
     } else if (latestEvent?.type === "run.cancelled") {
-      icon = <AlertTriangle className="h-4 w-4 text-yellow-400" />
+      icon = <AlertTriangle className="size-4 text-muted-foreground" />
       label = "审查已取消"
     } else {
-      icon = <CheckCircle className="h-4 w-4 text-emerald-400" />
+      icon = <CheckCircle className="size-4 text-primary" />
       label = "审查完成"
     }
   }
 
   return (
-    <div className="border-b bg-slate-950/95 px-4 py-3">
+    <div className="border-b bg-background px-4 py-3">
       <div className="flex items-start gap-3">
         <div className="mt-0.5 shrink-0">{icon}</div>
         <div className="min-w-0 flex-1">
-          <span className="text-sm font-semibold text-slate-100">{label}</span>
-          {detail && <div className="mt-1 text-xs text-slate-400">{detail}</div>}
+          <span className="text-sm font-semibold">{label}</span>
+          {detail && <div className="mt-1 text-xs text-muted-foreground">{detail}</div>}
         </div>
       </div>
-      {!isTerminal && (
-        <div className="mt-3 flex h-1 gap-1 overflow-hidden rounded-full bg-slate-800">
-          {[0, 1, 2].map((i) => (
-            <span
-              key={i}
-              className="h-full flex-1 animate-pulse rounded-full bg-sky-500/70"
-              style={{ animationDelay: `${i * 180}ms` }}
-            />
-          ))}
-        </div>
-      )}
+      {!isTerminal && <BreathingActivity />}
     </div>
   )
 }
@@ -292,33 +321,31 @@ function AgentCard({ agent }: { agent: AgentState }) {
   const isRunning = agent.status === "running"
   return (
     <div
-      className={`flex items-center gap-3 rounded-lg border px-3 py-2 ${
-        isRunning ? "border-sky-500/30 bg-sky-500/5" : "border-emerald-500/20 bg-emerald-500/5"
+      className={`flex items-center gap-3 rounded-lg border bg-background px-3 py-2 ${
+        isRunning ? "ring-1 ring-ring/20" : ""
       }`}
     >
       {isRunning ? (
-        <Loader2 className="h-4 w-4 shrink-0 animate-spin text-sky-400" />
+        <Loader2 className="size-4 shrink-0 animate-spin text-primary" />
       ) : (
-        <CheckCircle className="h-4 w-4 shrink-0 text-emerald-400" />
+        <CheckCircle className="size-4 shrink-0 text-primary" />
       )}
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className={`text-xs font-semibold ${isRunning ? "text-sky-300" : "text-emerald-300"}`}>
+          <span className="text-xs font-semibold">
             {agentLabel(agent.type)}
           </span>
           <span
-            className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
-              isRunning ? "bg-sky-500/20 text-sky-400" : "bg-emerald-500/20 text-emerald-400"
-            }`}
+            className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
           >
             {isRunning ? "执行中" : "已完成"}
           </span>
           {agent.toolCount > 0 && (
-            <span className="text-[10px] text-slate-500">{agent.toolCount} 次工具调用</span>
+            <span className="text-[10px] text-muted-foreground">{agent.toolCount} 次工具调用</span>
           )}
         </div>
         {isRunning && agent.action && (
-          <div className="mt-0.5 truncate font-mono text-[11px] text-slate-400">{agent.action}</div>
+          <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">{agent.action}</div>
         )}
       </div>
     </div>
@@ -339,13 +366,13 @@ function EventLog({ events }: { events: ReviewRunEvent[] }) {
     <div className="border-t">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-xs text-slate-400 hover:bg-slate-800/50 transition-colors"
+        className="flex w-full items-center gap-2 px-4 py-2 text-xs text-muted-foreground transition-colors hover:bg-muted/60"
       >
-        {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        {expanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
         <span>详细日志 ({events.length} 条事件)</span>
       </button>
       {expanded && (
-        <div ref={ref} className="scrollbar-hidden max-h-64 overflow-y-auto border-t px-3 py-2 font-mono text-[11px]">
+        <div ref={ref} className="scrollbar-hidden max-h-64 overflow-y-auto border-t bg-muted/20 px-4 py-2 font-mono text-[11px]">
           {events.map((e) => (
             <EventLine key={e.event_id} event={e} />
           ))}
@@ -361,8 +388,8 @@ function EventLine({ event }: { event: ReviewRunEvent }) {
 
   if (t === "run.started") {
     return (
-      <div className="flex items-center gap-2 py-0.5 text-green-400">
-        <Play className="h-3 w-3 shrink-0" />
+      <div className="flex items-center gap-2 py-0.5 text-muted-foreground">
+        <Play className="size-3 shrink-0" />
         <span>审查已开始</span>
       </div>
     )
@@ -370,14 +397,13 @@ function EventLine({ event }: { event: ReviewRunEvent }) {
 
   if (t === "tool.call") {
     const tool = p as unknown as ToolEventPayload
-    const Icon = toolIcon(tool.tool_name)
     return (
-      <div className="flex items-center gap-2 py-0.5 text-blue-400">
-        <Icon className="h-3 w-3 shrink-0" />
+      <div className="flex items-center gap-2 py-0.5 text-foreground">
+        <ToolIcon name={tool.tool_name} />
         <span>
-          <span className="text-blue-300/60">[{agentLabel(tool.agent_type)}]</span> {toolLabel(tool.tool_name)}
+          <span className="text-muted-foreground">[{agentLabel(tool.agent_type)}]</span> {toolLabel(tool.tool_name)}
           {tool.input_summary != null && (
-            <span className="ml-1 text-slate-500">{formatSummary(tool.input_summary)}</span>
+            <span className="ml-1 text-muted-foreground">{formatSummary(tool.input_summary)}</span>
           )}
         </span>
       </div>
@@ -386,10 +412,14 @@ function EventLine({ event }: { event: ReviewRunEvent }) {
 
   if (t === "tool.result") {
     const tool = p as unknown as ToolEventPayload
+    const result = formatToolResult(tool)
     return (
-      <div className={`flex items-center gap-2 py-0.5 ${tool.is_error ? "text-red-400" : "text-slate-500"}`}>
-        {tool.is_error ? <XCircle className="h-3 w-3 shrink-0" /> : <CheckCircle className="h-3 w-3 shrink-0" />}
-        <span>{toolLabel(tool.tool_name)}{tool.is_error && " (错误)"}</span>
+      <div className={`flex items-center gap-2 py-0.5 ${tool.is_error ? "text-destructive" : "text-muted-foreground"}`}>
+        {tool.is_error ? <XCircle className="size-3 shrink-0" /> : <CheckCircle className="size-3 shrink-0" />}
+        <span>
+          {toolLabel(tool.tool_name)}{tool.is_error && " (错误)"}
+          {result && <span className="ml-1 text-muted-foreground">{result}</span>}
+        </span>
       </div>
     )
   }
@@ -397,8 +427,8 @@ function EventLine({ event }: { event: ReviewRunEvent }) {
   if (t === "subagent.started") {
     const sub = p as unknown as SubagentEventPayload
     return (
-      <div className="flex items-center gap-2 py-0.5 text-yellow-400">
-        <Bot className="h-3 w-3 shrink-0" />
+      <div className="flex items-center gap-2 py-0.5 text-foreground">
+        <Bot className="size-3 shrink-0" />
         <span>[{agentLabel(sub.agent_type)}] 已启动</span>
       </div>
     )
@@ -407,8 +437,8 @@ function EventLine({ event }: { event: ReviewRunEvent }) {
   if (t === "subagent.completed") {
     const sub = p as unknown as SubagentEventPayload
     return (
-      <div className="flex items-center gap-2 py-0.5 text-emerald-400">
-        <Bot className="h-3 w-3 shrink-0" />
+      <div className="flex items-center gap-2 py-0.5 text-muted-foreground">
+        <Bot className="size-3 shrink-0" />
         <span>[{agentLabel(sub.agent_type)}] 已完成</span>
       </div>
     )
@@ -418,7 +448,7 @@ function EventLine({ event }: { event: ReviewRunEvent }) {
     const delta = p as unknown as MessageDeltaPayload
     if (!delta.text?.trim()) return null
     return (
-      <div className="py-0.5 pl-5 text-slate-500">
+      <div className="py-0.5 pl-5 text-muted-foreground">
         <span className="whitespace-pre-wrap">{delta.text.slice(0, 200)}</span>
       </div>
     )
@@ -440,17 +470,17 @@ function ProgressBar({
 }) {
   const pct = total > 0 ? Math.round((completed / total) * 100) : 0
   return (
-    <div className="flex items-center gap-3 border-t bg-slate-950/50 px-4 py-2 text-xs text-slate-400">
+    <div className="flex items-center gap-3 border-t bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
       <span>智能体进度</span>
-      <span className="font-mono text-sky-400">{completed}/{total}</span>
-      <div className="h-2 w-32 overflow-hidden rounded-full bg-slate-800">
+      <span className="font-mono text-foreground">{completed}/{total}</span>
+      <div className="h-2 w-32 overflow-hidden rounded-full bg-muted">
         <div
-          className="h-full rounded-full bg-gradient-to-r from-sky-500 to-emerald-500 transition-all duration-500"
+          className="h-full rounded-full bg-primary transition-all duration-500"
           style={{ width: `${pct}%` }}
         />
       </div>
       {(tokens.input > 0 || tokens.output > 0) && (
-        <span className="ml-auto font-mono text-[10px] text-slate-500">
+        <span className="ml-auto font-mono text-[10px] text-muted-foreground">
           {tokens.input.toLocaleString()} in / {tokens.output.toLocaleString()} out
         </span>
       )}
@@ -480,7 +510,6 @@ export function TerminalStream({
     }
     if (events.length === 0) {
       startedAt.current = null
-      setElapsed(0)
     }
   }, [events.length])
 
@@ -492,14 +521,16 @@ export function TerminalStream({
     return () => clearInterval(timer)
   }, [isDone, events.length])
 
+  const displayElapsed = events.length === 0 ? 0 : elapsed
+
   return (
     <div className="flex flex-col h-full">
-      <PhaseStepper phase={phase} elapsed={elapsed} />
+      <PhaseStepper phase={phase} elapsed={displayElapsed} />
       <LiveActivity phase={phase} agents={agents} latestEvent={latest} />
 
       {agents.length > 0 && (
         <div className="border-b px-4 py-3">
-          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">审查智能体</div>
+          <div className="mb-2 text-[11px] font-semibold uppercase text-muted-foreground">审查智能体</div>
           <div className="grid gap-2">
             {agents.map((a) => (
               <AgentCard key={a.type} agent={a} />
@@ -510,8 +541,8 @@ export function TerminalStream({
 
       {events.length === 0 && (
         <div className="flex flex-1 items-center justify-center">
-          <div className="text-center text-slate-500">
-            <Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin" />
+          <div className="text-center text-muted-foreground">
+            <Loader2 className="mx-auto mb-2 size-5 animate-spin" />
             <p className="text-xs">正在等待审查事件...</p>
           </div>
         </div>
