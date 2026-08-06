@@ -53,7 +53,7 @@ export function createPrRouter(octokit: Octokit, store: SessionStore): Router {
       }
 
       if (!prOwner || !prRepo || !prNumber) {
-        res.status(400).json({ error: 'Missing pr_url or owner/repo/pull_number' })
+        res.status(400).json({ detail: 'Missing pr_url or owner/repo/pull_number' })
         return
       }
 
@@ -64,14 +64,14 @@ export function createPrRouter(octokit: Octokit, store: SessionStore): Router {
       res.json(context)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      res.status(500).json({ error: message })
+      res.status(500).json({ detail: message })
     }
   })
 
   router.get('/api/pr/context/:id', (req, res) => {
     const context = contextOr404(contexts, store, req.params.id)
     if (!context) {
-      res.status(404).json({ error: 'PR context not found' })
+      res.status(404).json({ detail: 'PR context not found' })
       return
     }
     res.json(context)
@@ -80,14 +80,14 @@ export function createPrRouter(octokit: Octokit, store: SessionStore): Router {
   router.get('/api/pr/context/:id/files/:filename/patch', (req, res) => {
     const context = contextOr404(contexts, store, req.params.id)
     if (!context) {
-      res.status(404).json({ error: 'PR context not found' })
+      res.status(404).json({ detail: 'PR context not found' })
       return
     }
 
     const filename = decodeURIComponent(req.params.filename)
     const file = context.files.find((item) => item.filename === filename)
     if (!file) {
-      res.status(404).json({ error: 'File not found in PR' })
+      res.status(404).json({ detail: 'File not found in PR' })
       return
     }
 
@@ -118,7 +118,7 @@ export function createPrRouter(octokit: Octokit, store: SessionStore): Router {
     const contextId = req.body?.context_id
     const context = typeof contextId === 'string' ? contextOr404(contexts, store, contextId) : null
     if (!context) {
-      res.status(404).json({ error: 'PR context not found' })
+      res.status(404).json({ detail: 'PR context not found' })
       return
     }
 

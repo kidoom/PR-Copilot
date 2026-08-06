@@ -28,7 +28,7 @@ function mockOutput(messages: LLMMessage[]): string {
   }
 
   if (/Synthesize|final answer|all task outputs/i.test(text)) {
-    return '```json\n[{"file":"src/example.ts","line":1,"severity":"info","category":"code-quality","title":"Mock smoke finding","description":"Deterministic mock finding used to verify the review pipeline and WebSocket terminal payload.","evidence":[{"file":"src/example.ts","line":1,"snippet":"mock evidence","tool":"mock"}],"suggestion":"Replace mock mode with a real LLM for production reviews."}]\n```'
+    return '```json\n[{"file":"src/example.ts","line":1,"severity":"info","category":"code-quality","title":"Mock smoke finding","description":"Deterministic mock finding used to verify the review pipeline and streaming terminal payload.","evidence":[{"file":"src/example.ts","line":1,"snippet":"mock evidence","tool":"mock"}],"suggestion":"Replace mock mode with a real LLM for production reviews."}]\n```'
   }
 
   return 'Mock agent completed the delegated review task with deterministic evidence.'
