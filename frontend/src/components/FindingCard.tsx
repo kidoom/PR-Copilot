@@ -82,6 +82,11 @@ export function FindingCard({
           <div className="mt-1 text-sm font-medium [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-xs [&_code]:font-mono [&_p]:my-1 [&_ul]:my-1 [&_ul]:pl-4 [&_ol]:my-1 [&_ol]:pl-4">
             <Markdown>{finding.claim}</Markdown>
           </div>
+          {finding.description && (
+            <div className="mt-1 text-xs leading-relaxed text-muted-foreground [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-[11px] [&_code]:font-mono [&_p]:my-1 [&_ul]:my-1 [&_ul]:pl-4 [&_ol]:my-1 [&_ol]:pl-4">
+              <Markdown>{finding.description}</Markdown>
+            </div>
+          )}
           {finding.suggestion && (
             <div className="mt-2 rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs text-blue-800 dark:border-blue-800/50 dark:bg-blue-950/30 dark:text-blue-300 [&_code]:rounded [&_code]:bg-blue-100 [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-[11px] [&_code]:font-mono [&_p]:my-0.5">
               <span className="font-semibold">💡 建议：</span>

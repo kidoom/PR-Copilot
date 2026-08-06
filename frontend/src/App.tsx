@@ -1,42 +1,46 @@
-import { useState, useRef, useEffect, useCallback } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import type { ReactNode } from "react"
 import {
-  GitPullRequest,
-  Search,
-  Shield,
-  FileCode,
   AlertTriangle,
-  CheckCircle,
-  ExternalLink,
-  GitBranch,
-  Plus,
-  Minus,
-  Files,
-  ShieldCheck,
-  ShieldAlert,
-  Info,
-  BookOpen,
-  TestTube,
-  Settings,
-  Code,
-  Binary,
+  ArrowLeft,
   BarChart3,
-  FolderOpen,
-  Layers,
-  X,
+  Binary,
+  BookOpen,
   Bot,
+  CheckCircle2,
+  Code,
+  ExternalLink,
+  FileCode,
+  Files,
+  FolderOpen,
+  GitBranch,
+  GitPullRequest,
   History,
+  LayoutDashboard,
+  Minus,
+  Plus,
+  Search,
+  Settings,
+  Shield,
+  ShieldAlert,
+  ShieldCheck,
+  Sparkles,
+  TestTube,
+  X,
 } from "lucide-react"
-import { Input } from "@/components/ui/input"
-import { Button } from "@/components/ui/button"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
-import { Spinner } from "@/components/ui/spinner"
+import { Button } from "@/components/ui/button"
 import {
   Card,
+  CardAction,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
+import { Spinner } from "@/components/ui/spinner"
 import {
   Table,
   TableBody,
@@ -45,23 +49,25 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   analyzePr,
-  getIntakeSummary,
   getFilePatch,
+  getIntakeSummary,
+  getPrContext,
   getReviewRun,
   listAllSessions,
 } from "@/api"
 import type { PrSessionSummary } from "@/api"
+import { ReviewPanel } from "@/components/ReviewPanel"
 import type {
-  PrContextResponse,
   FileEntry,
-  IntakeSummary,
   FilePatchResponse,
   FinalReviewResult,
+  IntakeSummary,
+  PrContextResponse,
 } from "@/types"
-import { ReviewPanel } from "@/components/ReviewPanel"
+
+type View = "home" | "pr"
 
 function getStatusBadgeVariant(status: string) {
   if (status === "added") return "default" as const
@@ -70,12 +76,12 @@ function getStatusBadgeVariant(status: string) {
 }
 
 function getFileTypeIcon(file: FileEntry) {
-  if (file.is_test) return <TestTube className="h-3.5 w-3.5" />
-  if (file.is_docs) return <BookOpen className="h-3.5 w-3.5" />
-  if (file.is_config) return <Settings className="h-3.5 w-3.5" />
-  if (file.is_binary) return <Binary className="h-3.5 w-3.5" />
-  if (file.is_source) return <Code className="h-3.5 w-3.5" />
-  return <FileCode className="h-3.5 w-3.5" />
+  if (file.is_test) return <TestTube className="size-3.5" />
+  if (file.is_docs) return <BookOpen className="size-3.5" />
+  if (file.is_config) return <Settings className="size-3.5" />
+  if (file.is_binary) return <Binary className="size-3.5" />
+  if (file.is_source) return <Code className="size-3.5" />
+  return <FileCode className="size-3.5" />
 }
 
 function getRiskHintLabel(hint: string) {
@@ -84,43 +90,112 @@ function getRiskHintLabel(hint: string) {
     payment_path: "支付",
     db_path: "数据库",
     config_path: "配置",
-    no_test_pair: "无测试",
+    no_test_pair: "缺少测试",
+    high_risk_path: "高风险",
   }
-
   return labels[hint] ?? hint.replaceAll("_", " ")
-}
-
-function getRiskHintClassName(hint: string) {
-  if (hint === "auth_path" || hint === "payment_path") {
-    return "border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300"
-  }
-
-  if (hint === "db_path") {
-    return "border-orange-200 bg-orange-50 text-orange-700 dark:border-orange-900/60 dark:bg-orange-950/30 dark:text-orange-300"
-  }
-
-  if (hint === "config_path") {
-    return "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900/60 dark:bg-blue-950/30 dark:text-blue-300"
-  }
-
-  if (hint === "no_test_pair") {
-    return "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300"
-  }
-
-  return "border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300"
 }
 
 function getErrorGuidance(error: string): string {
   const lower = error.toLowerCase()
-  if (lower.includes("404") || lower.includes("not found"))
-    return "请检查 PR 链接是否正确，以及仓库是否存在于 GitHub 上。"
-  if (lower.includes("401") || lower.includes("403") || lower.includes("unauthorized"))
-    return "该仓库可能是私有的。请运行 `gh auth login` 或设置 GH_TOKEN 后重试。"
-  if (lower.includes("rate"))
-    return "GitHub API 请求频率超限。请设置 GH_TOKEN 或运行 `gh auth login` 以获取更高限额。"
-  if (lower.includes("network") || lower.includes("fetch"))
-    return "无法连接后端服务。请确认服务器已在 8000 端口运行。"
-  return "请检查 PR 链接并确保仓库可访问。"
+  if (lower.includes("404") || lower.includes("not found")) {
+    return "请确认 PR 链接正确，且仓库对当前凭据可见。"
+  }
+  if (lower.includes("401") || lower.includes("403") || lower.includes("unauthorized")) {
+    return "该仓库可能需要 GitHub 凭据，请确认 GITHUB_TOKEN 或 GitHub App 配置可用。"
+  }
+  if (lower.includes("rate")) {
+    return "GitHub API 频率受限，请稍后重试或配置更高额度的凭据。"
+  }
+  if (lower.includes("network") || lower.includes("fetch")) {
+    return "无法连接后端服务，请确认 server 已启动并且代理配置正确。"
+  }
+  return "请检查 PR 链接、后端日志和凭据配置。"
+}
+
+function formatNumber(value: number) {
+  return value.toLocaleString("zh-CN")
+}
+
+function SidebarNav({
+  result,
+  sessions,
+  view,
+  showReviewPanel,
+  onHome,
+  onToggleReview,
+}: {
+  result: PrContextResponse | null
+  sessions: PrSessionSummary[]
+  view: View
+  showReviewPanel: boolean
+  onHome: () => void
+  onToggleReview: () => void
+}) {
+  const highRiskCount = result?.derived.high_risk_files.length ?? 0
+  const navItemClassName = (active: boolean) =>
+    `flex items-center gap-2 rounded-lg px-3 py-2 text-left ${
+      active
+        ? "bg-muted font-medium"
+        : "text-muted-foreground hover:bg-muted hover:text-foreground"
+    }`
+
+  return (
+    <aside className="hidden w-60 shrink-0 border-r bg-card lg:flex lg:flex-col">
+      <div className="flex h-14 items-center gap-2 border-b px-4">
+        <div className="flex size-8 items-center justify-center rounded-lg border bg-background">
+          <GitPullRequest className="size-4" />
+        </div>
+        <div className="min-w-0">
+          <div className="text-sm font-semibold">PR Copilot</div>
+          <div className="text-xs text-muted-foreground">AI Review Console</div>
+        </div>
+      </div>
+
+      <nav className="flex flex-1 flex-col gap-1 px-3 py-4 text-sm">
+        <button
+          className={navItemClassName(view === "home")}
+          onClick={onHome}
+        >
+          <LayoutDashboard className="size-4" />
+          工作台
+        </button>
+        <button
+          className={navItemClassName(view === "pr" && showReviewPanel)}
+          onClick={onToggleReview}
+        >
+          <Bot className="size-4" />
+          AI 审查
+        </button>
+        <button
+          className={navItemClassName(false)}
+          onClick={onHome}
+        >
+          <History className="size-4" />
+          历史记录
+        </button>
+      </nav>
+
+      <div className="border-t p-3">
+        <div className="rounded-lg border bg-background p-3">
+          <div className="text-xs font-medium text-muted-foreground">当前上下文</div>
+          <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+            <div>
+              <div className="text-lg font-semibold">{result?.pr.changed_files ?? 0}</div>
+              <div className="text-muted-foreground">文件</div>
+            </div>
+            <div>
+              <div className="text-lg font-semibold">{highRiskCount}</div>
+              <div className="text-muted-foreground">风险</div>
+            </div>
+          </div>
+          <div className="mt-3 text-xs text-muted-foreground">
+            已缓存 {sessions.length} 个 PR 会话
+          </div>
+        </div>
+      </div>
+    </aside>
+  )
 }
 
 function EmptyState({
@@ -131,134 +206,86 @@ function EmptyState({
   onSessionClick: (session: PrSessionSummary) => void
 }) {
   return (
-    <div className="space-y-8">
-      <div className="flex flex-col items-center justify-center py-12 text-center">
-        <div className="mb-4 rounded-full bg-muted p-4">
-          <GitPullRequest className="h-8 w-8 text-muted-foreground" />
-        </div>
-        <h2 className="mb-2 text-lg font-semibold">分析 Pull Request</h2>
-        <p className="mb-6 max-w-md text-sm text-muted-foreground">
-          在上方粘贴 GitHub PR 链接，即可获取风险分析、变更文件摘要和审查建议。
-        </p>
-        <div className="flex items-center gap-2 rounded-lg border bg-muted/50 px-4 py-2 text-xs text-muted-foreground">
-          <Info className="h-3.5 w-3.5" />
-          <span>示例: https://github.com/owner/repo/pull/123</span>
-        </div>
-      </div>
-
-      {sessions.length > 0 && (
-        <Card>
-          <CardHeader className="pb-3">
-            <div className="flex items-center gap-2">
-              <History className="h-4 w-4" />
-              <CardTitle className="text-sm font-medium">历史审查记录</CardTitle>
-            </div>
-            <CardDescription>点击可查看之前的审查结果</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="divide-y">
-              {sessions.map((s) => (
-                <button
-                  key={s.pr_session_id}
-                  className="flex w-full items-start gap-3 py-2.5 text-left hover:bg-muted/50 transition-colors rounded px-2 -mx-2"
-                  onClick={() => onSessionClick(s)}
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="truncate text-sm font-medium">
-                        {s.owner}/{s.repo}#{s.pull_number}
-                      </span>
-                      {s.latest_lifecycle && (
-                        <span className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded-full ${
-                          s.latest_lifecycle === "completed"
-                            ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
-                            : s.latest_lifecycle === "failed"
-                              ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
-                              : "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400"
-                        }`}>
-                          {s.latest_lifecycle === "completed" ? "已完成" : s.latest_lifecycle === "failed" ? "失败" : s.latest_lifecycle === "cancelled" ? "已取消" : s.latest_lifecycle}
-                        </span>
-                      )}
-                    </div>
-                    <div className="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
-                      <span>{new Date(s.updated_at).toLocaleString("zh-CN")}</span>
-                      <span>{s.run_count} 次审查</span>
-                      {s.latest_finding_count != null && s.latest_finding_count > 0 && (
-                        <span>{s.latest_finding_count} 个发现</span>
-                      )}
-                    </div>
-                    {s.latest_summary && (
-                      <p className="mt-0.5 text-[11px] text-muted-foreground line-clamp-1">{s.latest_summary}</p>
-                    )}
-                  </div>
-                </button>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card className="border-dashed">
-          <CardHeader className="pb-3">
-            <div className="flex items-center gap-2 text-muted-foreground">
-              <Shield className="h-4 w-4" />
-              <CardTitle className="text-sm font-medium">风险概览</CardTitle>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <p className="text-xs text-muted-foreground">
-              识别高风险文件、安全敏感变更以及缺少测试覆盖的源代码修改。
+    <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <Card className="min-h-[420px] justify-center">
+        <CardContent className="flex flex-col items-center justify-center gap-4 py-14 text-center">
+          <div className="flex size-12 items-center justify-center rounded-lg border bg-muted">
+            <GitPullRequest className="size-6 text-muted-foreground" />
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold">分析一个 GitHub Pull Request</h2>
+            <p className="mt-2 max-w-md text-sm text-muted-foreground">
+              粘贴 PR 链接后，PR Copilot 会先提取上下文，再把审查过程流式展示出来。
             </p>
-          </CardContent>
-        </Card>
+          </div>
+          <div className="rounded-lg border bg-muted/40 px-3 py-2 font-mono text-xs text-muted-foreground">
+            https://github.com/owner/repo/pull/123
+          </div>
+        </CardContent>
+      </Card>
 
-        <Card className="border-dashed">
-          <CardHeader className="pb-3">
-            <div className="flex items-center gap-2 text-muted-foreground">
-              <Files className="h-4 w-4" />
-              <CardTitle className="text-sm font-medium">变更文件</CardTitle>
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <History className="size-4" />
+            最近审查
+          </CardTitle>
+          <CardDescription>点击记录可以快速回到历史 PR。</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-2">
+          {sessions.length === 0 ? (
+            <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+              暂无历史记录。
             </div>
-          </CardHeader>
-          <CardContent>
-            <p className="text-xs text-muted-foreground">
-              列出所有修改文件，包含语言、变更量、状态标签和优先级评分，便于重点审查。
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card className="border-dashed">
-          <CardHeader className="pb-3">
-            <div className="flex items-center gap-2 text-muted-foreground">
-              <Search className="h-4 w-4" />
-              <CardTitle className="text-sm font-medium">审查建议</CardTitle>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <p className="text-xs text-muted-foreground">
-              基于变更模式、风险信号和文件依赖关系，提供可操作的审查建议。
-            </p>
-          </CardContent>
-        </Card>
-      </div>
+          ) : (
+            sessions.slice(0, 8).map((session) => (
+              <button
+                key={session.pr_session_id}
+                className="rounded-lg border bg-background px-3 py-2 text-left transition-colors hover:bg-muted"
+                onClick={() => onSessionClick(session)}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate text-sm font-medium">
+                    {session.owner}/{session.repo}#{session.pull_number}
+                  </span>
+                  {session.latest_lifecycle && (
+                    <Badge variant={session.latest_lifecycle === "failed" ? "destructive" : "secondary"}>
+                      {session.latest_lifecycle === "completed"
+                        ? "完成"
+                        : session.latest_lifecycle === "failed"
+                          ? "失败"
+                          : session.latest_lifecycle}
+                    </Badge>
+                  )}
+                </div>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  {new Date(session.updated_at).toLocaleString("zh-CN")} · {session.run_count} 次审查
+                </div>
+              </button>
+            ))
+          )}
+        </CardContent>
+      </Card>
     </div>
   )
 }
 
 function LoadingState() {
   return (
-    <Card>
-      <CardContent className="flex flex-col items-center justify-center py-14 text-center">
-        <div className="mb-4 rounded-full bg-muted p-4">
-          <Spinner className="h-8 w-8" />
+    <Card className="min-h-[420px] justify-center">
+      <CardContent className="flex flex-col items-center justify-center gap-4 py-14 text-center">
+        <div className="flex size-12 items-center justify-center rounded-lg border bg-muted">
+          <Spinner className="size-6" />
         </div>
-        <h2 className="mb-2 text-lg font-semibold">正在分析 PR</h2>
-        <p className="max-w-md text-sm text-muted-foreground">
-          正在从后端获取 PR 元数据、变更文件和风险信号。
-        </p>
-        <div className="mt-6 grid w-full max-w-xl gap-2 text-left text-xs text-muted-foreground sm:grid-cols-3">
+        <div>
+          <h2 className="text-lg font-semibold">正在分析 PR</h2>
+          <p className="mt-2 max-w-md text-sm text-muted-foreground">
+            正在获取 PR 元数据、变更文件、风险信号和审查输入。
+          </p>
+        </div>
+        <div className="grid w-full max-w-xl gap-2 text-left text-xs text-muted-foreground sm:grid-cols-3">
           <div className="rounded-lg border bg-muted/30 p-3">获取 PR</div>
-          <div className="rounded-lg border bg-muted/30 p-3">读取文件</div>
+          <div className="rounded-lg border bg-muted/30 p-3">扫描文件</div>
           <div className="rounded-lg border bg-muted/30 p-3">准备审查</div>
         </div>
       </CardContent>
@@ -266,309 +293,250 @@ function LoadingState() {
   )
 }
 
-function ResultDashboard({ result, intake, onFileClick }: { result: PrContextResponse; intake: IntakeSummary | null; onFileClick: (file: FileEntry) => void }) {
+function MetricCard({
+  label,
+  value,
+  caption,
+  icon,
+}: {
+  label: string
+  value: string
+  caption: string
+  icon: ReactNode
+}) {
+  return (
+    <Card size="sm">
+      <CardContent>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-xs text-muted-foreground">{label}</div>
+            <div className="mt-1 text-2xl font-semibold tracking-tight">{value}</div>
+            <div className="mt-1 text-xs text-muted-foreground">{caption}</div>
+          </div>
+          <div className="flex size-9 items-center justify-center rounded-lg border bg-muted text-muted-foreground">
+            {icon}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function ResultDashboard({
+  result,
+  intake,
+  onFileClick,
+  onBack,
+}: {
+  result: PrContextResponse
+  intake: IntakeSummary | null
+  onFileClick: (file: FileEntry) => void
+  onBack: () => void
+}) {
   const hasHighRisk = result.derived.high_risk_files.length > 0
   const hasSourceWithoutTests = result.derived.has_source_without_tests
-  const isDocsOnly = result.derived.docs_only
-
-  const totalAdditions = result.pr.additions
-  const totalDeletions = result.pr.deletions
-
-  const highPriorityFiles = result.files.filter((f) => f.priority_score_hint >= 60)
-  const riskFiles = result.files.filter((f) => f.is_high_risk_path)
-  const reviewFocus =
-    riskFiles[0]?.filename ?? highPriorityFiles[0]?.filename ?? "无紧急关注文件"
+  const riskFiles = result.files.filter((file) => file.is_high_risk_path)
+  const highPriorityFiles = result.files.filter((file) => file.priority_score_hint >= 60)
+  const reviewFocus = riskFiles[0]?.filename ?? highPriorityFiles[0]?.filename ?? "暂无高优先级文件"
 
   return (
-    <div className="space-y-6">
-      {/* PR Metadata Summary Cards */}
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Card>
-          <CardContent className="pt-4">
-            <div className="flex items-center justify-between">
-              <div className="text-xs text-muted-foreground">变更</div>
-              <Files className="h-3.5 w-3.5 text-muted-foreground" />
-            </div>
-            <div className="mt-1 text-2xl font-bold">{result.pr.changed_files}</div>
-            <div className="text-xs text-muted-foreground">个文件修改</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-4">
-            <div className="flex items-center justify-between">
-              <div className="text-xs text-muted-foreground">新增</div>
-              <Plus className="h-3.5 w-3.5 text-green-600" />
-            </div>
-            <div className="mt-1 text-2xl font-bold text-green-600">
-              +{totalAdditions}
-            </div>
-            <div className="text-xs text-muted-foreground">行添加</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-4">
-            <div className="flex items-center justify-between">
-              <div className="text-xs text-muted-foreground">删除</div>
-              <Minus className="h-3.5 w-3.5 text-red-600" />
-            </div>
-            <div className="mt-1 text-2xl font-bold text-red-600">
-              -{totalDeletions}
-            </div>
-            <div className="text-xs text-muted-foreground">行删除</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-4">
-            <div className="flex items-center justify-between">
-              <div className="text-xs text-muted-foreground">风险等级</div>
-              {hasHighRisk || hasSourceWithoutTests ? (
-                <ShieldAlert className="h-3.5 w-3.5 text-destructive" />
-              ) : (
-                <ShieldCheck className="h-3.5 w-3.5 text-green-600" />
-              )}
-            </div>
-            <div className="mt-1 text-2xl font-bold">
-              {hasHighRisk || hasSourceWithoutTests ? "偏高" : "低"}
-            </div>
-            <div className="text-xs text-muted-foreground">
-              {hasHighRisk
-                ? `${result.derived.high_risk_files.length} 个高风险文件`
-                : "无关键信号"}
-            </div>
-          </CardContent>
-        </Card>
+    <div className="flex flex-col gap-4">
+      <Button
+        className="self-start"
+        variant="ghost"
+        size="sm"
+        onClick={onBack}
+      >
+        <ArrowLeft className="size-4" data-icon="inline-start" />
+        返回工作台
+      </Button>
+
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <MetricCard
+          label="变更文件"
+          value={formatNumber(result.pr.changed_files)}
+          caption="本次 PR 修改"
+          icon={<Files className="size-4" />}
+        />
+        <MetricCard
+          label="新增"
+          value={`+${formatNumber(result.pr.additions)}`}
+          caption="行添加"
+          icon={<Plus className="size-4" />}
+        />
+        <MetricCard
+          label="删除"
+          value={`-${formatNumber(result.pr.deletions)}`}
+          caption="行删除"
+          icon={<Minus className="size-4" />}
+        />
+        <MetricCard
+          label="风险等级"
+          value={hasHighRisk || hasSourceWithoutTests ? "偏高" : "低"}
+          caption={hasHighRisk ? `${result.derived.high_risk_files.length} 个风险文件` : "无关键风险信号"}
+          icon={hasHighRisk || hasSourceWithoutTests ? <ShieldAlert className="size-4" /> : <ShieldCheck className="size-4" />}
+        />
       </div>
 
-      {/* Intake Summary */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="min-w-0">
+            <a
+              className="inline-flex max-w-full items-center gap-2 hover:underline"
+              href={result.pr.url}
+              rel="noopener noreferrer"
+              target="_blank"
+            >
+              <GitPullRequest className="size-4 shrink-0" />
+              <span className="truncate">{result.pr.title}</span>
+              <ExternalLink className="size-3.5 shrink-0 text-muted-foreground" />
+            </a>
+          </CardTitle>
+          <CardDescription className="flex flex-wrap items-center gap-2">
+            <span>{result.pr.author}</span>
+            <span className="text-muted-foreground/50">·</span>
+            <span className="inline-flex items-center gap-1">
+              <GitBranch className="size-3.5" />
+              {result.pr.base_branch} ← {result.pr.head_branch}
+            </span>
+            {result.pr.head_sha && (
+              <>
+                <span className="text-muted-foreground/50">·</span>
+                <span className="font-mono">{result.pr.head_sha.slice(0, 8)}</span>
+              </>
+            )}
+          </CardDescription>
+        </CardHeader>
+      </Card>
+
       {intake && (
-        <div className="grid gap-4 md:grid-cols-3">
-          <Card>
-            <CardHeader className="pb-3">
-              <div className="flex items-center gap-2">
-                <Layers className="h-4 w-4" />
-                <CardTitle className="text-sm font-medium">PR 规模</CardTitle>
-              </div>
+        <div className="grid gap-3 md:grid-cols-3">
+          <Card size="sm">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <Sparkles className="size-4" />
+                PR 规模
+              </CardTitle>
             </CardHeader>
             <CardContent>
-              <Badge
-                variant={
-                  intake.size === "large"
-                    ? "destructive"
-                    : intake.size === "medium"
-                      ? "secondary"
-                      : "default"
-                }
-                className="text-base"
-              >
+              <Badge variant={intake.size === "large" ? "destructive" : "secondary"}>
                 {intake.size}
               </Badge>
               <div className="mt-2 text-xs text-muted-foreground">
-                {intake.change_type === "docs" && "仅文档变更"}
-                {intake.change_type === "test" && "仅测试变更"}
-                {intake.change_type === "config" && "仅配置变更"}
-                {intake.change_type === "source" && "源代码变更"}
-                {intake.change_type === "mixed" && "混合变更类型"}
-              </div>
-              {intake.notable_signals.length > 0 && (
-                <div className="mt-2 flex flex-wrap gap-1">
-                  {intake.notable_signals.map((s) => (
-                    <Badge key={s} variant="outline" className="text-xs">
-                      {s.replace(/_/g, " ")}
-                    </Badge>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-3">
-              <div className="flex items-center gap-2">
-                <BarChart3 className="h-4 w-4" />
-                <CardTitle className="text-sm font-medium">语言分布</CardTitle>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-1.5">
-                {Object.entries(intake.language_distribution)
-                  .sort(([, a], [, b]) => b - a)
-                  .slice(0, 5)
-                  .map(([lang, count]) => (
-                    <div key={lang} className="flex items-center justify-between text-xs">
-                      <span className="font-mono">{lang}</span>
-                      <Badge variant="secondary">{count}</Badge>
-                    </div>
-                  ))}
+                {intake.change_type === "mixed" ? "混合变更" : `${intake.change_type} 变更`}
               </div>
             </CardContent>
           </Card>
 
-          <Card>
-            <CardHeader className="pb-3">
-              <div className="flex items-center gap-2">
-                <FolderOpen className="h-4 w-4" />
-                <CardTitle className="text-sm font-medium">热门目录</CardTitle>
-              </div>
+          <Card size="sm">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <BarChart3 className="size-4" />
+                语言分布
+              </CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="space-y-1.5">
-                {intake.top_directories.slice(0, 5).map((d) => (
-                  <div key={d.directory} className="flex items-center justify-between text-xs">
-                    <span className="truncate font-mono">{d.directory}</span>
-                    <Badge variant="secondary">{d.file_count}</Badge>
+            <CardContent className="flex flex-col gap-2">
+              {Object.entries(intake.language_distribution)
+                .sort(([, a], [, b]) => b - a)
+                .slice(0, 4)
+                .map(([language, count]) => (
+                  <div key={language} className="flex items-center justify-between gap-2 text-xs">
+                    <span className="truncate font-mono">{language}</span>
+                    <Badge variant="secondary">{count}</Badge>
                   </div>
                 ))}
-              </div>
+            </CardContent>
+          </Card>
+
+          <Card size="sm">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <FolderOpen className="size-4" />
+                热门目录
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-2">
+              {intake.top_directories.slice(0, 4).map((directory) => (
+                <div key={directory.directory} className="flex items-center justify-between gap-2 text-xs">
+                  <span className="truncate font-mono">{directory.directory}</span>
+                  <Badge variant="secondary">{directory.file_count}</Badge>
+                </div>
+              ))}
             </CardContent>
           </Card>
         </div>
       )}
 
-      {/* PR Info + Risk Signals Row */}
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
         <Card>
-          <CardHeader className="pb-3">
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0 flex-1">
-                <CardTitle className="truncate text-base">
-                  <a
-                    href={result.pr.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 hover:underline"
-                  >
-                    <GitPullRequest className="h-4 w-4 shrink-0" />
-                    <span className="truncate">{result.pr.title}</span>
-                    <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" />
-                  </a>
-                </CardTitle>
-                <CardDescription className="mt-1 flex items-center gap-2">
-                  <span>{result.pr.author}</span>
-                  <span className="text-muted-foreground/50">|</span>
-                  <span className="inline-flex items-center gap-1">
-                    <GitBranch className="h-3 w-3" />
-                    {result.pr.base_branch}
-                    <span className="text-muted-foreground/50">&larr;</span>
-                    {result.pr.head_branch}
-                  </span>
-                </CardDescription>
-              </div>
-            </div>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <Shield className="size-4" />
+              审查建议
+            </CardTitle>
+            <CardDescription>根据变更模式和风险信号生成的优先级提示。</CardDescription>
           </CardHeader>
+          <CardContent>
+            <div className="flex flex-col gap-2 text-sm">
+              {hasHighRisk && (
+                <div className="rounded-lg border bg-muted/30 p-3">
+                  优先审查高风险路径，尤其是认证、配置、权限和敏感数据相关变更。
+                </div>
+              )}
+              {hasSourceWithoutTests && (
+                <div className="rounded-lg border bg-muted/30 p-3">
+                  当前存在源代码变更但没有明显测试配套，建议重点检查回归风险。
+                </div>
+              )}
+              {highPriorityFiles.length > 0 && (
+                <div className="rounded-lg border bg-muted/30 p-3">
+                  优先关注 {highPriorityFiles.slice(0, 3).map((file) => file.filename).join("、")}
+                  {highPriorityFiles.length > 3 ? " 等文件。" : "。"}
+                </div>
+              )}
+              {!hasHighRisk && !hasSourceWithoutTests && highPriorityFiles.length === 0 && (
+                <div className="rounded-lg border bg-muted/30 p-3">
+                  未检测到紧急风险信号，可以按常规代码审查流程推进。
+                </div>
+              )}
+            </div>
+          </CardContent>
         </Card>
 
         <Card>
-          <CardHeader className="pb-3">
-            <div className="flex items-center gap-2">
-              <Shield className="h-4 w-4" />
-              <CardTitle className="text-sm font-medium">风险信号</CardTitle>
-            </div>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <CheckCircle2 className="size-4" />
+              AI 审查就绪
+            </CardTitle>
+            <CardDescription>已准备好交给 OMA 智能体执行。</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-2">
-            {isDocsOnly && (
-              <div className="flex items-center gap-2">
-                <Badge variant="secondary">仅文档</Badge>
-                <span className="text-xs text-muted-foreground">
-                  仅文档变更
-                </span>
+          <CardContent className="flex flex-col gap-3 text-sm">
+            <div>
+              <div className="text-xs text-muted-foreground">审查焦点</div>
+              <div className="mt-1 truncate font-mono text-xs">{reviewFocus}</div>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="rounded-lg border bg-muted/30 p-2">
+                <div className="text-lg font-semibold">{riskFiles.length}</div>
+                <div className="text-xs text-muted-foreground">风险文件</div>
               </div>
-            )}
-            {hasSourceWithoutTests && (
-              <div className="flex items-center gap-2">
-                <Badge variant="destructive">无测试覆盖</Badge>
-                <span className="text-xs text-muted-foreground">
-                  源文件已修改但缺少对应测试
-                </span>
+              <div className="rounded-lg border bg-muted/30 p-2">
+                <div className="text-lg font-semibold">{highPriorityFiles.length}</div>
+                <div className="text-xs text-muted-foreground">高优先级</div>
               </div>
-            )}
-            {hasHighRisk && (
-              <div className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <Badge variant="destructive">高风险路径</Badge>
-                </div>
-                <div className="flex flex-wrap gap-1">
-                  {result.derived.high_risk_files.map((f) => (
-                    <Badge key={f} variant="outline" className="font-mono text-xs">
-                      {f}
-                    </Badge>
-                  ))}
-                </div>
-              </div>
-            )}
-            {!isDocsOnly && !hasSourceWithoutTests && !hasHighRisk && (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <CheckCircle className="h-4 w-4 text-green-600" />
-                <span>未检测到关键风险信号</span>
-              </div>
-            )}
+            </div>
           </CardContent>
         </Card>
       </div>
 
-      {/* Review Recommendations */}
-      {(highPriorityFiles.length > 0 || hasSourceWithoutTests || hasHighRisk) && (
-        <Card>
-          <CardHeader className="pb-3">
-            <div className="flex items-center gap-2">
-              <Search className="h-4 w-4" />
-              <CardTitle className="text-sm font-medium">审查建议</CardTitle>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <ul className="space-y-2 text-sm">
-              {highPriorityFiles.length > 0 && (
-                <li className="flex items-start gap-2">
-                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
-                  <span>
-                    优先关注 <strong>{highPriorityFiles.length} 个高优先级文件</strong>
-                    （评分 &ge; 60）：
-                    <span className="ml-1 font-mono text-xs text-muted-foreground">
-                      {highPriorityFiles.slice(0, 3).map((f) => f.filename).join(", ")}
-                      {highPriorityFiles.length > 3 && ` +${highPriorityFiles.length - 3} 个更多`}
-                    </span>
-                  </span>
-                </li>
-              )}
-              {hasSourceWithoutTests && (
-                <li className="flex items-start gap-2">
-                  <TestTube className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
-                  <span>
-                    建议为本次 PR 中变更的源文件添加或更新测试。
-                  </span>
-                </li>
-              )}
-              {hasHighRisk && (
-                <li className="flex items-start gap-2">
-                  <Shield className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
-                  <span>
-                    仔细审查高风险路径中的安全、认证或基础设施变更。
-                  </span>
-                </li>
-              )}
-              {isDocsOnly && (
-                <li className="flex items-start gap-2">
-                  <BookOpen className="mt-0.5 h-4 w-4 shrink-0 text-blue-500" />
-                  <span>
-                    仅文档变更。除非影响公开 API 文档，否则审查优先级较低。
-                  </span>
-                </li>
-              )}
-            </ul>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Changed Files Table */}
       <Card>
-        <CardHeader className="pb-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <FileCode className="h-4 w-4" />
-              <CardTitle className="text-sm font-medium">
-                变更文件 ({result.files.length})
-              </CardTitle>
-            </div>
-          </div>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <Files className="size-4" />
+            变更文件 ({result.files.length})
+          </CardTitle>
+          <CardDescription>点击文件可打开右侧 diff 查看器。</CardDescription>
         </CardHeader>
         <CardContent>
           <Table>
@@ -586,50 +554,33 @@ function ResultDashboard({ result, intake, onFileClick }: { result: PrContextRes
               {result.files.map((file) => (
                 <TableRow
                   key={file.filename}
-                  className={`cursor-pointer hover:bg-muted/50 ${
-                    file.is_high_risk_path ? "bg-destructive/5 font-medium" : ""
-                  }`}
+                  className="cursor-pointer"
                   onClick={() => onFileClick(file)}
                 >
-                  <TableCell className="max-w-[280px] lg:max-w-sm">
-                    <div className="flex items-center gap-1.5">
+                  <TableCell className="max-w-[360px]">
+                    <div className="flex items-center gap-2">
                       {getFileTypeIcon(file)}
-                      <span className="truncate font-mono text-xs">
-                        {file.filename}
-                      </span>
+                      <span className="truncate font-mono text-xs">{file.filename}</span>
                     </div>
                   </TableCell>
                   <TableCell>
-                    <Badge variant={getStatusBadgeVariant(file.status)}>
-                      {file.status}
-                    </Badge>
+                    <Badge variant={getStatusBadgeVariant(file.status)}>{file.status}</Badge>
                   </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">
-                    {file.language}
-                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{file.language}</TableCell>
                   <TableCell className="text-right text-xs">
-                    <span className="text-green-600">+{file.additions}</span>{" "}
-                    <span className="text-red-600">-{file.deletions}</span>
+                    <span>+{file.additions}</span>{" "}
+                    <span className="text-muted-foreground">-{file.deletions}</span>
                   </TableCell>
                   <TableCell>
                     <div className="flex flex-wrap gap-1">
                       {file.risk_hints.length > 0 ? (
-                        file.risk_hints.map((h) => (
-                          <Badge
-                            key={h}
-                            variant="outline"
-                            className={getRiskHintClassName(h)}
-                          >
-                            {getRiskHintLabel(h)}
+                        file.risk_hints.map((hint) => (
+                          <Badge key={hint} variant="outline">
+                            {getRiskHintLabel(hint)}
                           </Badge>
                         ))
                       ) : (
-                        <Badge
-                          variant="outline"
-                          className="border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300"
-                        >
-                          无
-                        </Badge>
+                        <Badge variant="outline">无</Badge>
                       )}
                     </div>
                   </TableCell>
@@ -642,7 +593,6 @@ function ResultDashboard({ result, intake, onFileClick }: { result: PrContextRes
                             ? "secondary"
                             : "outline"
                       }
-                      className="text-xs"
                     >
                       {file.priority_score_hint}
                     </Badge>
@@ -651,79 +601,6 @@ function ResultDashboard({ result, intake, onFileClick }: { result: PrContextRes
               ))}
             </TableBody>
           </Table>
-        </CardContent>
-      </Card>
-
-      {/* AI Review Readiness */}
-      <Card>
-        <CardHeader className="pb-3">
-          <div className="flex items-center gap-2">
-            <ShieldCheck className="h-4 w-4" />
-            <CardTitle className="text-sm font-medium">
-              AI 审查就绪
-            </CardTitle>
-          </div>
-          <CardDescription>
-            PR Copilot 已从当前 PR 中提取以下审查输入。
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-3 md:grid-cols-3">
-            <div className="rounded-lg border bg-muted/30 p-3">
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <Files className="h-3.5 w-3.5" />
-                已扫描文件
-              </div>
-              <div className="mt-1 text-xl font-semibold">
-                {result.pr.changed_files}
-              </div>
-              <div className="text-xs text-muted-foreground">
-                {totalAdditions + totalDeletions} 行变更
-              </div>
-            </div>
-
-            <div className="rounded-lg border bg-muted/30 p-3">
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <Shield className="h-3.5 w-3.5" />
-                风险焦点
-              </div>
-              <div className="mt-1 truncate text-sm font-medium">
-                {reviewFocus}
-              </div>
-              <div className="text-xs text-muted-foreground">
-                {riskFiles.length > 0
-                  ? `${riskFiles.length} 个高风险文件`
-                  : "未检测到高风险路径"}
-              </div>
-            </div>
-
-            <div className="rounded-lg border bg-muted/30 p-3">
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <TestTube className="h-3.5 w-3.5" />
-                测试信号
-              </div>
-              <div className="mt-1 text-sm font-medium">
-                {hasSourceWithoutTests ? "需要测试审查" : "无测试缺口"}
-              </div>
-              <div className="text-xs text-muted-foreground">
-                {isDocsOnly ? "仅文档变更" : "基于文件分类"}
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-4 rounded-lg border bg-background p-3 text-sm">
-            <div className="mb-2 font-medium">建议审查重点</div>
-            <ul className="space-y-1 text-muted-foreground">
-              {hasHighRisk && <li>合并审批前请审查高风险路径。</li>}
-              {hasSourceWithoutTests && <li>检查源代码变更是否需要测试。</li>}
-              {highPriorityFiles.length > 0 && (
-                <li>优先处理评分 60 及以上的文件。</li>
-              )}
-              {!hasHighRisk && !hasSourceWithoutTests && highPriorityFiles.length === 0 && (
-                <li>未检测到紧急信号，请按常规流程审查。</li>
-              )}
-            </ul>
-          </div>
         </CardContent>
       </Card>
     </div>
@@ -745,47 +622,36 @@ function DiffSidebar({
 }) {
   return (
     <>
-      {/* Backdrop */}
-      <div
-        className="fixed inset-0 z-40 bg-black/30 md:bg-black/10"
-        onClick={onClose}
-      />
-      {/* Sidebar */}
-      <div className="fixed right-0 top-0 z-50 flex h-full w-full flex-col border-l bg-card shadow-lg md:w-[480px]">
-        {/* Header */}
-        <div className="flex items-center justify-between border-b px-4 py-3">
-          <div className="min-w-0 flex-1">
+      <div className="fixed inset-0 z-40 bg-background/70 backdrop-blur-sm" onClick={onClose} />
+      <div className="fixed right-0 top-0 z-50 flex h-full w-full flex-col border-l bg-card shadow-lg md:w-[560px]">
+        <div className="flex items-start justify-between gap-3 border-b px-4 py-3">
+          <div className="min-w-0">
             <div className="flex items-center gap-2">
               {getFileTypeIcon(file)}
-              <span className="truncate font-mono text-sm font-medium">
-                {file.filename}
-              </span>
+              <span className="truncate font-mono text-sm font-medium">{file.filename}</span>
             </div>
-            <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-              <Badge variant={getStatusBadgeVariant(file.status)} className="text-xs">
-                {file.status}
-              </Badge>
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <Badge variant={getStatusBadgeVariant(file.status)}>{file.status}</Badge>
               <span>{file.language}</span>
-              <span className="text-green-600">+{file.additions}</span>
-              <span className="text-red-600">-{file.deletions}</span>
+              <span>+{file.additions}</span>
+              <span>-{file.deletions}</span>
             </div>
           </div>
           <Button variant="ghost" size="icon-sm" onClick={onClose}>
-            <X className="h-4 w-4" />
+            <X data-icon="inline-start" />
           </Button>
         </div>
 
-        {/* Content */}
-        <div className="flex-1 overflow-auto">
+        <div className="min-h-0 flex-1 overflow-auto">
           {loading && (
             <div className="flex items-center justify-center py-12">
-              <Spinner className="h-6 w-6" />
+              <Spinner className="size-6" />
             </div>
           )}
           {error && (
             <div className="p-4">
               <Alert variant="destructive">
-                <AlertTriangle className="h-4 w-4" />
+                <AlertTriangle className="size-4" />
                 <AlertDescription>{error}</AlertDescription>
               </Alert>
             </div>
@@ -793,62 +659,49 @@ function DiffSidebar({
           {patch && (
             <div className="text-xs">
               {!patch.patch_available && (
-                <div className="p-4 text-muted-foreground">
-                  该文件无可用补丁。
-                </div>
+                <div className="p-4 text-muted-foreground">该文件没有可显示的 patch。</div>
               )}
               {patch.is_binary && (
-                <div className="p-4 text-muted-foreground">
-                  二进制文件 — 不显示差异。
-                </div>
+                <div className="p-4 text-muted-foreground">二进制文件无法展示文本 diff。</div>
               )}
               {patch.parse_error && (
-                <div className="p-4 text-amber-600">
-                  解析错误: {patch.parse_error}
-                </div>
+                <div className="p-4 text-destructive">解析错误：{patch.parse_error}</div>
               )}
               {patch.truncated && (
-                <div className="border-b bg-amber-50 px-4 py-2 text-amber-700 dark:bg-amber-950/30 dark:text-amber-300">
-                  已截断 — 仅显示前 500 行。
+                <div className="border-b bg-muted px-4 py-2 text-muted-foreground">
+                  diff 已截断，仅展示前 500 行。
                 </div>
               )}
-              {patch.hunks.map((hunk, hi) => (
-                <div key={hi}>
-                  <div className="border-b bg-muted/50 px-4 py-1.5 font-mono text-xs text-muted-foreground">
+              {patch.hunks.map((hunk, hunkIndex) => (
+                <div key={`${hunk.header}-${hunkIndex}`}>
+                  <div className="border-b bg-muted/60 px-4 py-1.5 font-mono text-muted-foreground">
                     {hunk.header}
                   </div>
-                  {hunk.lines.map((line, li) => (
+                  {hunk.lines.map((line, lineIndex) => (
                     <div
-                      key={li}
+                      key={`${hunkIndex}-${lineIndex}`}
                       className={`flex font-mono ${
                         line.type === "added"
-                          ? "bg-green-100 dark:bg-green-950/40"
+                          ? "bg-emerald-500/10"
                           : line.type === "removed"
-                            ? "bg-red-100 dark:bg-red-950/40"
+                            ? "bg-destructive/10"
                             : ""
                       }`}
                     >
-                      <span className="w-12 shrink-0 select-none border-r px-2 text-right text-muted-foreground">
+                      <span className="w-12 shrink-0 border-r px-2 text-right text-muted-foreground">
                         {line.old_line ?? ""}
                       </span>
-                      <span className="w-12 shrink-0 select-none border-r px-2 text-right text-muted-foreground">
+                      <span className="w-12 shrink-0 border-r px-2 text-right text-muted-foreground">
                         {line.new_line ?? ""}
                       </span>
-                      <span className="w-5 shrink-0 select-none text-center">
+                      <span className="w-5 shrink-0 text-center">
                         {line.type === "added" ? "+" : line.type === "removed" ? "-" : " "}
                       </span>
-                      <span className="flex-1 whitespace-pre px-1">
-                        {line.content}
-                      </span>
+                      <span className="min-w-0 flex-1 whitespace-pre px-1">{line.content}</span>
                     </div>
                   ))}
                 </div>
               ))}
-              {patch.patch_available && patch.hunks.length === 0 && (
-                <div className="p-4 text-muted-foreground">
-                  该补丁无差异块。
-                </div>
-              )}
             </div>
           )}
         </div>
@@ -863,66 +716,53 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<PrContextResponse | null>(null)
   const [intake, setIntake] = useState<IntakeSummary | null>(null)
+  const [view, setView] = useState<View>("home")
   const [showReviewPanel, setShowReviewPanel] = useState(false)
   const [sessions, setSessions] = useState<PrSessionSummary[]>([])
   const [historicalResult, setHistoricalResult] = useState<FinalReviewResult | null>(null)
-
-  // Sidebar state
   const [selectedFile, setSelectedFile] = useState<FileEntry | null>(null)
   const [patchLoading, setPatchLoading] = useState(false)
   const [patchData, setPatchData] = useState<FilePatchResponse | null>(null)
   const [patchError, setPatchError] = useState<string | null>(null)
   const patchRequestId = useRef(0)
 
-  // Load global session history on mount
   useEffect(() => {
     listAllSessions()
       .then((data) => setSessions(data.sessions))
       .catch(() => {})
   }, [])
 
-  const handleSessionClick = useCallback(
-    async (session: PrSessionSummary) => {
-      // Load historical result directly
-      if (session.latest_run_id && session.latest_lifecycle === "completed") {
-        try {
-          const status = await getReviewRun(session.latest_run_id)
-          if (status.final_result) {
-            setHistoricalResult(status.final_result)
-            setShowReviewPanel(true)
-            // Also set the PR URL for context
-            const url = `https://github.com/${session.owner}/${session.repo}/pull/${session.pull_number}`
-            setPrUrl(url)
-            return
-          }
-        } catch {
-          // fall through to URL fill
-        }
-      }
-      // Fallback: just fill the PR URL
-      const url = `https://github.com/${session.owner}/${session.repo}/pull/${session.pull_number}`
-      setPrUrl(url)
-    },
-    [],
-  )
-
-  // Lock body scroll when sidebar is open on mobile
   useEffect(() => {
-    if (selectedFile) {
-      document.body.style.overflow = "hidden"
-      return () => {
-        document.body.style.overflow = ""
-      }
+    if (!selectedFile) return
+    document.body.style.overflow = "hidden"
+    return () => {
+      document.body.style.overflow = ""
     }
   }, [selectedFile])
 
-  const contentState = loading
-    ? "loading"
-    : result
-      ? "result"
-      : error
-        ? "error"
-        : "empty"
+  const closeDiff = useCallback(() => {
+    setSelectedFile(null)
+    setPatchData(null)
+    setPatchError(null)
+  }, [])
+
+  const goHome = useCallback(() => {
+    setView("home")
+    setResult(null)
+    setIntake(null)
+    setHistoricalResult(null)
+    setShowReviewPanel(false)
+    setError(null)
+    closeDiff()
+  }, [closeDiff])
+
+  const handleSidebarAiReview = useCallback(() => {
+    if (view === "pr" && result) {
+      setShowReviewPanel((visible) => !visible)
+    } else {
+      goHome()
+    }
+  }, [view, result, goHome])
 
   const handleFileClick = useCallback(
     async (file: FileEntry) => {
@@ -934,168 +774,228 @@ function App() {
       const requestId = ++patchRequestId.current
       try {
         const data = await getFilePatch(result.context_id, file.filename)
-        if (patchRequestId.current !== requestId) return
-        setPatchData(data)
+        if (patchRequestId.current === requestId) setPatchData(data)
       } catch (e) {
-        if (patchRequestId.current !== requestId) return
-        setPatchError(e instanceof Error ? e.message : "加载补丁失败")
-      } finally {
         if (patchRequestId.current === requestId) {
-          setPatchLoading(false)
+          setPatchError(e instanceof Error ? e.message : "加载 diff 失败")
         }
+      } finally {
+        if (patchRequestId.current === requestId) setPatchLoading(false)
       }
     },
     [result],
   )
 
-  const closeSidebar = useCallback(() => {
-    setSelectedFile(null)
-    setPatchData(null)
-    setPatchError(null)
-  }, [])
-
-  const handleAnalyze = async () => {
-    if (!prUrl.trim()) {
-      setError("请输入 GitHub PR 链接以开始分析。")
-      return
-    }
+  const handleSessionClick = useCallback(async (session: PrSessionSummary) => {
+    const url = `https://github.com/${session.owner}/${session.repo}/pull/${session.pull_number}`
+    setPrUrl(url)
     setLoading(true)
+    setView("home")
     setError(null)
     setResult(null)
     setIntake(null)
     setHistoricalResult(null)
-    closeSidebar()
+    closeDiff()
+
     try {
-      const data = await analyzePr(prUrl)
+      const data = await getPrContext(session.pr_session_id)
       setResult(data)
+      setView("pr")
+
       try {
         const intakeData = await getIntakeSummary(data.context_id)
         setIntake(intakeData)
       } catch {
-        // intake is optional, don't block on failure
+        // Intake is helpful, not required for restoring a historical PR.
       }
+
+      let restoredResult: FinalReviewResult | null = null
+      if (session.latest_run_id && session.latest_lifecycle === "completed") {
+        try {
+          const status = await getReviewRun(session.latest_run_id)
+          if (status.final_result) {
+            restoredResult = status.final_result
+          }
+        } catch {
+          // The PR context is still useful even if the latest run cannot be restored.
+        }
+      }
+      setHistoricalResult(restoredResult)
+      setShowReviewPanel(true)
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "请求失败"
-      setError(msg)
+      setError(e instanceof Error ? e.message : "加载历史记录失败")
     } finally {
       setLoading(false)
     }
-  }
+  }, [closeDiff])
+
+  const handleAnalyze = useCallback(async () => {
+    if (!prUrl.trim()) {
+      setError("请输入 GitHub PR 链接。")
+      return
+    }
+    setLoading(true)
+    setView("home")
+    setError(null)
+    setResult(null)
+    setIntake(null)
+    setHistoricalResult(null)
+    closeDiff()
+    try {
+      const data = await analyzePr(prUrl)
+      setResult(data)
+      setView("pr")
+      setShowReviewPanel(true)
+      try {
+        const intakeData = await getIntakeSummary(data.context_id)
+        setIntake(intakeData)
+      } catch {
+        // Intake is helpful, not required for the main workflow.
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "请求失败")
+    } finally {
+      setLoading(false)
+    }
+  }, [closeDiff, prUrl])
+
+  const contentState = loading ? "loading" : result ? "result" : error ? "error" : "empty"
+  const showConsole = view === "pr" && showReviewPanel && (result || historicalResult)
+
+  const workspaceClassName = useMemo(
+    () =>
+      showConsole
+        ? "grid gap-4 xl:grid-cols-[minmax(0,1fr)_460px]"
+        : "grid gap-4",
+    [showConsole],
+  )
 
   return (
-    <div className="min-h-screen bg-background">
-      {/* Top Command Bar */}
-      <header className="sticky top-0 z-10 border-b bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">
-        <div className="mx-auto flex h-14 max-w-6xl items-center justify-between gap-4 px-4">
-          <div className="flex items-center gap-2">
-            <GitPullRequest className="h-5 w-5" />
-            <span className="text-sm font-semibold">PR Copilot</span>
-            <Badge variant="outline" className="hidden text-xs sm:inline-flex">
-              v0.1
-            </Badge>
-          </div>
-        </div>
-      </header>
+    <div className="flex min-h-screen bg-muted/30 text-foreground">
+      <SidebarNav
+        result={result}
+        sessions={sessions}
+        view={view}
+        showReviewPanel={Boolean(showConsole)}
+        onHome={goHome}
+        onToggleReview={handleSidebarAiReview}
+      />
 
-      <main className="mx-auto max-w-6xl px-4 py-6">
-        {/* PR Input Area */}
-        <div className="mb-6">
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                placeholder="https://github.com/owner/repo/pull/123"
-                value={prUrl}
-                onChange={(e) => {
-                  setPrUrl(e.target.value)
-                  if (error) setError(null)
-                }}
-                onKeyDown={(e) => e.key === "Enter" && !loading && handleAnalyze()}
-                disabled={loading}
-                className="pl-9"
-              />
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="sticky top-0 border-b bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">
+          <div className="flex min-h-14 flex-col gap-3 px-4 py-3 xl:flex-row xl:items-center xl:justify-between">
+            <div className="flex min-w-0 items-center gap-3 lg:hidden">
+              <div className="flex size-8 items-center justify-center rounded-lg border bg-background">
+                <GitPullRequest className="size-4" />
+              </div>
+              <div>
+                <div className="text-sm font-semibold">PR Copilot</div>
+                <div className="text-xs text-muted-foreground">AI Review Console</div>
+              </div>
             </div>
-            <Button
-              onClick={handleAnalyze}
-              disabled={loading}
-              className="sm:w-auto"
-            >
-              {loading ? (
-                <Spinner className="mr-2 h-4 w-4" />
-              ) : (
-                <Search className="mr-2 h-4 w-4" />
+
+            <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row">
+              <div className="relative min-w-0 flex-1">
+                <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  className="pl-9"
+                  disabled={loading}
+                  onChange={(event) => {
+                    setPrUrl(event.target.value)
+                    if (error) setError(null)
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !loading) handleAnalyze()
+                  }}
+                  placeholder="https://github.com/owner/repo/pull/123"
+                  value={prUrl}
+                />
+              </div>
+              <Button disabled={loading} onClick={handleAnalyze}>
+                {loading ? <Spinner data-icon="inline-start" /> : <Search data-icon="inline-start" />}
+                {loading ? "分析中" : "分析 PR"}
+              </Button>
+              <Button
+                disabled={!result && !historicalResult}
+                onClick={() => setShowReviewPanel((visible) => !visible)}
+                variant={showReviewPanel ? "secondary" : "outline"}
+              >
+                <Bot data-icon="inline-start" />
+                {showReviewPanel ? "隐藏审查" : "AI 审查"}
+              </Button>
+            </div>
+          </div>
+        </header>
+
+        <main className="min-w-0 flex-1 p-4">
+          <div className={workspaceClassName}>
+            <section className="min-w-0">
+              {contentState === "loading" && <LoadingState />}
+              {contentState === "error" && error && (
+                <Alert variant="destructive">
+                  <AlertTriangle className="size-4" />
+                  <AlertDescription>
+                    <div className="font-medium">{error}</div>
+                    <div className="mt-1 text-xs opacity-80">{getErrorGuidance(error)}</div>
+                  </AlertDescription>
+                </Alert>
               )}
-              {loading ? "分析中..." : "分析 PR"}
-            </Button>
-            <Button
-              variant={showReviewPanel ? "secondary" : "default"}
-              disabled={!result || loading}
-              onClick={() => setShowReviewPanel(!showReviewPanel)}
-              className="sm:w-auto"
-            >
-              <Bot className="mr-2 h-4 w-4" />
-              {showReviewPanel ? "隐藏审查" : "AI 审查"}
-            </Button>
-          </div>
+              {contentState === "empty" && (
+                <EmptyState sessions={sessions} onSessionClick={handleSessionClick} />
+              )}
+              {contentState === "result" && result && (
+                <ResultDashboard
+                  result={result}
+                  intake={intake}
+                  onFileClick={handleFileClick}
+                  onBack={goHome}
+                />
+              )}
+            </section>
 
-          {loading && (
-            <div className="mt-3 flex items-center gap-2 text-sm text-muted-foreground">
-              <Spinner className="h-3.5 w-3.5" />
-              <span>正在从 GitHub 获取 PR 上下文...</span>
-            </div>
-          )}
-        </div>
-
-        <section key={contentState} className="flex min-h-0 gap-0">
-          <div className={`min-w-0 ${showReviewPanel && result ? "w-[60%]" : "w-full"}`}>
-            {contentState === "loading" && <LoadingState />}
-            {contentState === "error" && error && (
-              <Alert variant="destructive">
-                <AlertTriangle className="h-4 w-4" />
-                <AlertDescription>
-                  <div className="font-medium">{error}</div>
-                  <div className="mt-1 text-xs opacity-80">
-                    {getErrorGuidance(error)}
-                  </div>
-                </AlertDescription>
-              </Alert>
+            {showConsole && (
+              <aside className="min-h-[520px] min-w-0 xl:sticky xl:top-[5.25rem] xl:h-[calc(100vh-6.25rem)]">
+                <Card className="h-full gap-0 py-0">
+                  <CardHeader className="border-b py-3">
+                    <CardTitle className="flex items-center gap-2 text-sm">
+                      <Bot className="size-4" />
+                      AI 审查控制台
+                    </CardTitle>
+                    <CardDescription>实时查看任务规划、智能体执行和结果汇总。</CardDescription>
+                    <CardAction>
+                      <Button variant="ghost" size="icon-sm" onClick={() => setShowReviewPanel(false)}>
+                        <X data-icon="inline-start" />
+                      </Button>
+                    </CardAction>
+                  </CardHeader>
+                  <CardContent className="min-h-0 flex-1 px-0">
+                    <ReviewPanel
+                      contextId={result?.context_id}
+                      initialResult={historicalResult}
+                      onClose={() => {
+                        setShowReviewPanel(false)
+                        setHistoricalResult(null)
+                      }}
+                      onFileClick={(filename) => {
+                        const file = result?.files.find((item) => item.filename === filename)
+                        if (file) handleFileClick(file)
+                      }}
+                    />
+                  </CardContent>
+                </Card>
+              </aside>
             )}
-            {contentState === "empty" && <EmptyState sessions={sessions} onSessionClick={handleSessionClick} />}
-            {contentState === "result" && result && (
-              <ResultDashboard result={result} intake={intake} onFileClick={handleFileClick} />
-            )}
           </div>
-          {showReviewPanel && result && !historicalResult && (
-            <div className="sticky top-20 h-[calc(100vh-6.5rem)] w-[40%] shrink-0 self-start overflow-hidden">
-              <ReviewPanel
-                contextId={result.context_id}
-                onClose={() => { setShowReviewPanel(false); setHistoricalResult(null) }}
-                onFileClick={(filename) => {
-                  const file = result.files.find((f) => f.filename === filename)
-                  if (file) handleFileClick(file)
-                }}
-              />
-            </div>
-          )}
-          {showReviewPanel && historicalResult && (
-            <div className="sticky top-20 h-[calc(100vh-6.5rem)] w-[40%] shrink-0 self-start overflow-hidden">
-              <ReviewPanel
-                onClose={() => { setShowReviewPanel(false); setHistoricalResult(null) }}
-                initialResult={historicalResult}
-              />
-            </div>
-          )}
-        </section>
-      </main>
+        </main>
+      </div>
 
-      {/* Diff Sidebar */}
       {selectedFile && (
         <DiffSidebar
-          file={selectedFile}
-          patch={patchData}
-          loading={patchLoading}
           error={patchError}
-          onClose={closeSidebar}
+          file={selectedFile}
+          loading={patchLoading}
+          onClose={closeDiff}
+          patch={patchData}
         />
       )}
     </div>

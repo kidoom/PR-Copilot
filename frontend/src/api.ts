@@ -4,10 +4,11 @@ import type {
   FilePatchResponse,
   ReviewRunEvent,
   ReviewRunStatusResponse,
+  FinalReviewResult,
+  TaskSummary,
 } from "./types"
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "")
-const rawContextCache = new Map<string, unknown>()
 
 function apiUrl(path: string): string {
   return `${API_BASE}${path}`
@@ -39,6 +40,10 @@ function asString(value: unknown, fallback = ""): string {
 
 function asNumber(value: unknown, fallback = 0): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback
+}
+
+function asOptionalNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined
 }
 
 function asBoolean(value: unknown, fallback = false): boolean {
@@ -200,8 +205,18 @@ export async function analyzePr(prUrl: string): Promise<PrContextResponse> {
 
   const raw = await res.json()
   const normalized = normalizePrContextResponse(raw)
-  rawContextCache.set(normalized.context_id, raw)
   return normalized
+}
+
+export async function getPrContext(contextId: string): Promise<PrContextResponse> {
+  const res = await fetch(apiUrl(`/api/pr/context/${encodeURIComponent(contextId)}`))
+
+  if (!res.ok) {
+    await throwApiError(res, `Request failed: ${res.status}`)
+  }
+
+  const raw = await res.json()
+  return normalizePrContextResponse(raw)
 }
 
 function normalizeFinding(value: unknown, index: number) {
@@ -222,6 +237,7 @@ function normalizeFinding(value: unknown, index: number) {
 
   return {
     claim: title || description,
+    description: title && description && title !== description ? description : undefined,
     confidence: 0.8,
     severity: asString(finding.severity, "info") as "informational" | "info" | "low" | "medium" | "high" | "critical",
     evidence,
@@ -230,20 +246,67 @@ function normalizeFinding(value: unknown, index: number) {
   }
 }
 
-function normalizeFinalResultPayload(payload: unknown) {
+function normalizeTaskSummary(value: unknown, index: number): TaskSummary {
+  const task = asRecord(value)
+  const rawStatus = asString(task.execution_status, asString(task.status))
+  const success = task.success
+  const executionStatus =
+    rawStatus ||
+    (success === true ? "completed" : success === false ? "failed" : "completed")
+
+  return {
+    task_id: asString(task.task_id, asString(task.id, asString(task.task, `task_${index + 1}`))),
+    task_type: asString(task.task_type, asString(task.type, "review")),
+    agent_type: asString(task.agent_type, asString(task.agent, asString(task.agent_name, "agent"))),
+    child_session_id: asString(task.child_session_id, asString(task.session_id)),
+    execution_status: executionStatus,
+    parse_status: asString(
+      task.parse_status,
+      executionStatus === "failed" || executionStatus === "error" ? "invalid" : "valid",
+    ),
+    validation_errors: Array.isArray(task.validation_errors)
+      ? task.validation_errors.filter((item): item is string => typeof item === "string")
+      : [],
+    model_id: asString(task.model_id) || undefined,
+    model_calls: asOptionalNumber(task.model_calls),
+    input_tokens: asOptionalNumber(task.input_tokens),
+    output_tokens: asOptionalNumber(task.output_tokens),
+    observation_tokens: asOptionalNumber(task.observation_tokens),
+    elapsed_ms: asOptionalNumber(task.elapsed_ms),
+    retries: asOptionalNumber(task.retries),
+    fallback_used: typeof task.fallback_used === "boolean" ? task.fallback_used : undefined,
+    failure_reason: asString(task.failure_reason) || undefined,
+  }
+}
+
+function normalizeFinalResultPayload(payload: unknown): FinalReviewResult {
   const root = asRecord(payload)
   const findings = Array.isArray(root.findings) ? root.findings.map(normalizeFinding) : []
+  const taskSummaries = Array.isArray(root.task_summaries)
+    ? root.task_summaries.map(normalizeTaskSummary)
+    : Array.isArray(root.tasks)
+      ? root.tasks.map(normalizeTaskSummary)
+      : []
+  const tokenUsage = asRecord(root.token_usage)
+
   return {
     status: asString(root.status, "completed"),
     summary: asString(root.summary, findings.length ? `${findings.length} findings` : "No findings"),
     findings,
-    uncertainties: [],
-    notes: [],
-    task_summaries: [],
+    uncertainties: asStringArray(root.uncertainties),
+    notes: asStringArray(root.notes),
+    task_summaries: taskSummaries,
     raw_output: JSON.stringify(root),
-    steps: Array.isArray(root.tasks) ? root.tasks.length : 0,
-    stopped_by_max_steps: false,
-    token_usage: { input_tokens: 0, output_tokens: 0 },
+    steps: asNumber(root.steps, taskSummaries.length),
+    stopped_by_max_steps: asBoolean(root.stopped_by_max_steps),
+    token_usage: {
+      input_tokens: asNumber(tokenUsage.input_tokens),
+      output_tokens: asNumber(tokenUsage.output_tokens),
+    },
+    coverage: root.coverage as FinalReviewResult["coverage"],
+    run_usage: root.run_usage as FinalReviewResult["run_usage"],
+    uncovered_high_priority_paths: asStringArray(root.uncovered_high_priority_paths),
+    coverage_counts: root.coverage_counts as FinalReviewResult["coverage_counts"],
   }
 }
 
@@ -267,8 +330,9 @@ export async function getFilePatch(
   filename: string,
 ): Promise<FilePatchResponse> {
   const encodedFilename = encodeURIComponent(filename)
+  const encodedContextId = encodeURIComponent(contextId)
   const res = await fetch(
-    apiUrl(`/api/pr/context/${contextId}/files/${encodedFilename}/patch`),
+    apiUrl(`/api/pr/context/${encodedContextId}/files/${encodedFilename}/patch`),
   )
 
   if (!res.ok) {
@@ -283,19 +347,11 @@ export async function createReviewRun(
   contextId: string,
   localRepoRoot?: string,
 ): Promise<{ run_id: string; status: string }> {
-  if (!rawContextCache.has(contextId)) {
-    const contextRes = await fetch(apiUrl(`/api/pr/context/${encodeURIComponent(contextId)}`))
-    if (contextRes.ok) {
-      rawContextCache.set(contextId, await contextRes.json())
-    }
-  }
-
   const res = await fetch(apiUrl("/api/review/runs"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       context_id: contextId,
-      pr_context: rawContextCache.get(contextId),
       local_repo_root: localRepoRoot || undefined,
     }),
   })
@@ -399,22 +455,20 @@ export function subscribeToReviewRun(
   onOpen?: () => void,
   onError?: (message: string) => void,
 ): () => void {
-  const wsBase = API_BASE
+  const sseUrl = API_BASE
     ? new URL(API_BASE, window.location.origin)
     : new URL(window.location.origin)
-  wsBase.protocol = wsBase.protocol === "https:" ? "wss:" : "ws:"
-  wsBase.pathname = `/ws/review-runs/${encodeURIComponent(runId)}`
-  wsBase.search = ""
-  wsBase.hash = ""
-  const ws = new WebSocket(wsBase)
-  let receivedTerminalEvent = false
+  sseUrl.pathname = `/api/review/runs/${encodeURIComponent(runId)}/events`
+  sseUrl.searchParams.set("after_sequence", "-1")
+  sseUrl.hash = ""
+  const source = new EventSource(sseUrl.toString())
   let disposed = false
 
-  ws.addEventListener("open", () => {
+  source.addEventListener("open", () => {
     onOpen?.()
   })
 
-  ws.addEventListener("message", (msg) => {
+  source.addEventListener("message", (msg) => {
     try {
       const data = JSON.parse(msg.data) as ReviewRunEvent
       if (data.type === "run.completed") {
@@ -422,30 +476,21 @@ export function subscribeToReviewRun(
       }
       onEvent(data)
       if (TERMINAL_EVENTS.has(data.type)) {
-        receivedTerminalEvent = true
-        ws.close()
+        source.close()
       }
     } catch {
       // ignore malformed messages
     }
   })
 
-  ws.addEventListener("error", () => {
+  source.addEventListener("error", () => {
     if (!disposed) {
-      onError?.("Live progress connection failed. The review may still be running on the backend.")
-    }
-  })
-
-  ws.addEventListener("close", () => {
-    if (!receivedTerminalEvent && !disposed) {
-      onError?.("Live progress connection closed before the review finished.")
+      onError?.("Live progress connection is reconnecting. The review may still be running on the backend.")
     }
   })
 
   return () => {
     disposed = true
-    if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
-      ws.close()
-    }
+    source.close()
   }
 }

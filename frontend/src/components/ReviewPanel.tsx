@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react"
 import { X, Play, Loader2, AlertTriangle, CheckCircle2, AlertCircle, History } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
 import { TerminalStream } from "./TerminalStream"
 import { FindingCard, SeveritySummary } from "./FindingCard"
 import {
@@ -124,7 +125,7 @@ export function ReviewPanel({ contextId, onClose, onFileClick, initialResult }: 
         (message) => {
           setStreamConnected(false)
           setStreamError(message)
-          // Start polling fallback when WS drops
+          // Start polling fallback when the live stream drops.
           if (!pollTimerRef.current) {
             pollTimerRef.current = setInterval(async () => {
               try {
@@ -174,6 +175,7 @@ export function ReviewPanel({ contextId, onClose, onFileClick, initialResult }: 
     if (!runId) return
     try {
       await cancelReviewRun(runId)
+      setPhase("cancelled")
     } catch {
       // ignore cancel errors
     }
@@ -225,16 +227,28 @@ export function ReviewPanel({ contextId, onClose, onFileClick, initialResult }: 
   const totalTasks = finalResult?.task_summaries.length || 0
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden border-l bg-card">
-      <div className="flex items-center justify-between border-b px-3 py-2">
-        <h3 className="text-sm font-semibold">AI 审查</h3>
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-card">
+      <div className="flex items-center justify-between border-b px-4 py-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <Badge variant={phase === "running" ? "default" : phase === "failed" ? "destructive" : "secondary"}>
+            {phase === "idle"
+              ? "待启动"
+              : phase === "running"
+                ? "运行中"
+                : phase === "completed"
+                  ? "已完成"
+                  : phase === "cancelled"
+                    ? "已取消"
+                    : "失败"}
+          </Badge>
+          {runId && <span className="truncate font-mono text-[11px] text-muted-foreground">{runId}</span>}
+        </div>
         <div className="flex items-center gap-2">
           {isRunning && (
             <Button
               variant="outline"
               size="sm"
               onClick={handleCancel}
-              className="h-7 text-xs"
             >
               取消
             </Button>
@@ -244,7 +258,6 @@ export function ReviewPanel({ contextId, onClose, onFileClick, initialResult }: 
               variant="outline"
               size="sm"
               onClick={handleRerun}
-              className="h-7 text-xs"
             >
               重新运行
             </Button>
@@ -254,10 +267,9 @@ export function ReviewPanel({ contextId, onClose, onFileClick, initialResult }: 
             size="icon"
             onClick={showHistory ? () => setShowHistory(false) : loadHistory}
             disabled={historyLoading}
-            className="h-7 w-7"
             title="历史审查"
           >
-            <History className="h-4 w-4" />
+            <History data-icon="inline-start" />
           </Button>
           <Button
             variant="ghost"
@@ -266,16 +278,15 @@ export function ReviewPanel({ contextId, onClose, onFileClick, initialResult }: 
               cleanup()
               onClose()
             }}
-            className="h-7 w-7"
           >
-            <X className="h-4 w-4" />
+            <X data-icon="inline-start" />
           </Button>
         </div>
       </div>
 
       {showHistory && (
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-          <div className="border-b px-3 py-2">
+          <div className="border-b px-4 py-3">
             <h4 className="text-xs font-semibold">历史审查记录</h4>
           </div>
           {historyRuns.length === 0 ? (
@@ -287,22 +298,16 @@ export function ReviewPanel({ contextId, onClose, onFileClick, initialResult }: 
               {historyRuns.map((run) => (
                 <button
                   key={run.run_id}
-                  className="flex w-full flex-col gap-1 px-3 py-2.5 text-left hover:bg-muted/50 transition-colors"
+                  className="flex w-full flex-col gap-1 px-4 py-3 text-left transition-colors hover:bg-muted/50"
                   onClick={() => viewHistoricalResult(run.run_id)}
                 >
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-xs font-mono text-muted-foreground truncate">
                       {run.run_id}
                     </span>
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
-                      run.lifecycle === "completed"
-                        ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
-                        : run.lifecycle === "failed"
-                          ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
-                          : "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400"
-                    }`}>
+                    <Badge variant={run.lifecycle === "failed" ? "destructive" : "secondary"}>
                       {run.lifecycle === "completed" ? "已完成" : run.lifecycle === "failed" ? "失败" : run.lifecycle === "cancelled" ? "已取消" : run.lifecycle}
-                    </span>
+                    </Badge>
                   </div>
                   <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
                     <span>{new Date(run.created_at).toLocaleString("zh-CN")}</span>
@@ -325,8 +330,8 @@ export function ReviewPanel({ contextId, onClose, onFileClick, initialResult }: 
 
       {phase === "idle" && !showHistory && (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
-          <div className="rounded-full bg-muted p-3">
-            <Play className="h-6 w-6 text-muted-foreground" />
+          <div className="flex size-12 items-center justify-center rounded-lg border bg-muted">
+            <Play className="size-6 text-muted-foreground" />
           </div>
           <p className="text-sm text-muted-foreground">
             启动 AI 审查，使用专业 Agent 分析此 PR。
@@ -352,7 +357,7 @@ export function ReviewPanel({ contextId, onClose, onFileClick, initialResult }: 
 
           {isRunning && (
             <div className="flex items-center gap-2 border-t px-3 py-2 text-xs text-muted-foreground">
-              <Loader2 className="h-3 w-3 animate-spin" />
+              <Loader2 className="size-3 animate-spin" />
               <span>
                 {streamConnected
                   ? "正在使用专业 Agent 分析 PR..."
@@ -363,21 +368,21 @@ export function ReviewPanel({ contextId, onClose, onFileClick, initialResult }: 
 
           {isRunning && streamError && (
             <div className="flex items-start gap-2 border-t border-yellow-200 bg-yellow-50 px-3 py-2 text-xs text-yellow-700 dark:border-yellow-900/50 dark:bg-yellow-950/30 dark:text-yellow-300">
-              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
               <span>{streamError}</span>
             </div>
           )}
 
           {phase === "failed" && error && (
             <div className="flex items-start gap-2 border-t border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300">
-              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
               <span>{error}</span>
             </div>
           )}
 
           {phase === "cancelled" && (
             <div className="flex items-center gap-2 border-t border-yellow-200 bg-yellow-50 px-3 py-2 text-xs text-yellow-700 dark:border-yellow-900/50 dark:bg-yellow-950/30 dark:text-yellow-300">
-              <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+              <AlertTriangle className="size-3.5 shrink-0" />
               <span>审查已取消</span>
             </div>
           )}
@@ -402,8 +407,12 @@ export function ReviewPanel({ contextId, onClose, onFileClick, initialResult }: 
                 </div>
                 <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
                   <span>{findings.length} 个发现</span>
-                  <span aria-hidden="true">|</span>
-                  <span>{validTasks}/{totalTasks} 个任务已验证</span>
+                  {totalTasks > 0 && (
+                    <>
+                      <span aria-hidden="true">|</span>
+                      <span>{validTasks}/{totalTasks} 个任务已验证</span>
+                    </>
+                  )}
                   {finalResult.stopped_by_max_steps && (
                     <>
                       <span aria-hidden="true">|</span>

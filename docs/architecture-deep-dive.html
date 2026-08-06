@@ -1,0 +1,970 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PR Copilot — 实现细节深度解析</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#ffffff;--surface:#f6f8fa;--card:#ffffff;--border:#dce0e6;
+  --text:#1a1f2e;--muted:#5e6b7e;--accent:#4263eb;--accent2:#0ca678;
+  --red:#e03131;--orange:#e8590c;--yellow:#f08c00;--green:#2f9e44;
+  --purple:#7048e8;--cyan:#1098ad;--pink:#d6336c;
+  --radius:12px;--shadow:0 2px 12px rgba(0,0,0,.08);
+  --mono:'Fira Code','Cascadia Code','JetBrains Mono',monospace;
+}
+html{scroll-behavior:smooth;font-size:16px}
+body{font-family:'Inter','Segoe UI',system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);line-height:1.7;overflow-x:hidden}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+code{background:rgba(66,99,235,.07);padding:1px 6px;border-radius:4px;font-size:.85em;font-family:var(--mono)}
+pre{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 22px;overflow-x:auto;font-size:.8rem;line-height:1.6;font-family:var(--mono);color:var(--text)}
+pre code{background:none;padding:0;font-size:inherit}
+
+.container{max-width:1100px;margin:0 auto;padding:0 24px}
+section{padding:64px 0}
+.section-title{font-size:1.8rem;font-weight:800;margin-bottom:6px;color:var(--text)}
+.section-title span{background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.section-sub{color:var(--muted);font-size:.95rem;margin-bottom:40px}
+
+nav{position:fixed;top:0;left:0;right:0;z-index:100;background:rgba(255,255,255,.92);backdrop-filter:blur(12px);border-bottom:1px solid var(--border);padding:0 24px}
+nav .inner{max-width:1100px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;height:52px}
+nav .logo{font-weight:700;font-size:1rem;color:var(--text);display:flex;align-items:center;gap:6px}
+nav .logo svg{width:24px;height:24px}
+nav ul{list-style:none;display:flex;gap:18px}
+nav ul li a{color:var(--muted);font-size:.8rem;font-weight:500;transition:color .2s}
+nav ul li a:hover{color:var(--text);text-decoration:none}
+
+.hero{padding:120px 0 48px;text-align:center}
+.hero h1{font-size:2.4rem;font-weight:800;line-height:1.3;margin-bottom:12px}
+.hero h1 em{font-style:normal;background:linear-gradient(135deg,var(--accent),var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.hero p{font-size:1.05rem;color:var(--muted);max-width:600px;margin:0 auto}
+.hero-links{margin-top:20px;display:flex;gap:16px;justify-content:center}
+.hero-links a{padding:8px 20px;border-radius:8px;font-size:.85rem;font-weight:600;border:1px solid var(--border);color:var(--muted);transition:all .2s}
+.hero-links a:hover{border-color:var(--accent);color:var(--accent);text-decoration:none}
+
+/* cards */
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:24px;margin-bottom:16px;transition:box-shadow .2s}
+.card:hover{box-shadow:var(--shadow)}
+.card h3{font-size:1.1rem;font-weight:700;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+.card h3 .icon{width:28px;height:28px;border-radius:7px;display:inline-flex;align-items:center;justify-content:center;font-size:.9rem;flex-shrink:0}
+.card p,.card li{font-size:.85rem;color:var(--muted);line-height:1.6}
+.card ul{list-style:none;padding:0}
+.card ul li{padding:3px 0 3px 18px;position:relative}
+.card ul li::before{content:'›';position:absolute;left:2px;color:var(--accent);font-weight:700}
+
+/* two-col */
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.three-col{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+@media(max-width:768px){.two-col,.three-col{grid-template-columns:1fr}}
+
+/* step list */
+.step-list{counter-reset:step}
+.step-item{counter-increment:step;display:flex;gap:16px;margin-bottom:14px;position:relative}
+.step-item::before{content:counter(step);width:32px;height:32px;border-radius:50%;background:rgba(66,99,235,.1);color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:.85rem;flex-shrink:0;margin-top:2px}
+.step-body{flex:1}
+.step-body h4{font-size:.95rem;font-weight:700;margin-bottom:4px}
+.step-body p{font-size:.82rem;color:var(--muted)}
+
+/* table */
+table.detail{width:100%;border-collapse:collapse;font-size:.82rem;margin-bottom:16px}
+table.detail th{text-align:left;padding:10px 14px;background:var(--surface);font-weight:600;font-size:.72rem;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);border-bottom:2px solid var(--border)}
+table.detail td{padding:10px 14px;border-bottom:1px solid var(--border);vertical-align:top}
+table.detail tr:hover td{background:rgba(66,99,235,.03)}
+table.detail code{font-size:.78rem}
+
+/* tags */
+.tag{display:inline-block;padding:2px 8px;border-radius:6px;font-size:.7rem;font-weight:600;margin-right:4px}
+.tag-blue{background:rgba(66,99,235,.1);color:var(--accent)}
+.tag-green{background:rgba(12,166,120,.1);color:var(--accent2)}
+.tag-red{background:rgba(224,49,49,.1);color:var(--red)}
+.tag-orange{background:rgba(232,89,12,.1);color:var(--orange)}
+.tag-purple{background:rgba(112,72,232,.1);color:var(--purple)}
+.tag-cyan{background:rgba(16,152,173,.1);color:var(--cyan)}
+
+/* severity badges */
+.sev{display:inline-block;padding:1px 8px;border-radius:4px;font-size:.7rem;font-weight:700}
+.sev-critical{background:#ffe0e0;color:#c92a2a}
+.sev-high{background:#fff0e0;color:#e8590c}
+.sev-medium{background:#fff8e0;color:#e67700}
+.sev-low{background:#e0f0ff;color:#1971c2}
+.sev-info{background:#f0f0f0;color:#868e96}
+
+/* pipeline */
+.pipeline{display:flex;align-items:stretch;gap:4px;margin:20px 0;flex-wrap:wrap}
+.pipe-step{flex:1;min-width:140px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px;text-align:center}
+.pipe-step .pipe-icon{font-size:1.3rem;margin-bottom:6px}
+.pipe-step h5{font-size:.82rem;font-weight:700;margin-bottom:4px}
+.pipe-step p{font-size:.7rem;color:var(--muted)}
+.pipe-arrow{display:flex;align-items:center;font-size:1.1rem;color:var(--muted);flex-shrink:0;padding:0 2px}
+@media(max-width:768px){.pipeline{flex-direction:column}.pipe-arrow{transform:rotate(90deg);justify-content:center;padding:4px 0}}
+
+footer{padding:40px 0;text-align:center;border-top:1px solid var(--border);color:var(--muted);font-size:.8rem}
+.fade-in{opacity:0;transform:translateY(16px);transition:opacity .5s ease,transform .5s ease}
+.fade-in.visible{opacity:1;transform:translateY(0)}
+
+/* anchor offset */
+[id]{scroll-margin-top:64px}
+
+/* sub-nav tabs */
+.subnav{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:32px}
+.subnav a{padding:6px 14px;border-radius:8px;font-size:.78rem;font-weight:600;border:1px solid var(--border);color:var(--muted);transition:all .2s}
+.subnav a:hover{border-color:var(--accent);color:var(--accent);text-decoration:none;background:rgba(66,99,235,.04)}
+</style>
+</head>
+<body>
+
+<!-- Nav -->
+<nav>
+  <div class="inner">
+    <div class="logo">
+      <svg viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="14" stroke="var(--accent)" stroke-width="2"/><path d="M10 16l4 4 8-8" stroke="var(--accent2)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      PR Copilot
+    </div>
+    <ul>
+      <li><a href="#pipeline">主管线</a></li>
+      <li><a href="#static">静态审查</a></li>
+      <li><a href="#agents">Agent 设计</a></li>
+      <li><a href="#tools">工具实现</a></li>
+      <li><a href="#compression">压缩系统</a></li>
+      <li><a href="#streaming">事件流</a></li>
+      <li><a href="#types">数据结构</a></li>
+      <li><a href="architecture.html">← 概览版</a></li>
+    </ul>
+  </div>
+</nav>
+
+<!-- Hero -->
+<header class="hero">
+  <div class="container">
+    <h1>PR Copilot<br><em>实现细节深度解析</em></h1>
+    <p>从函数签名到数据结构，从算法步骤到错误处理 — 每一个内部实现细节的完整记录</p>
+    <div class="hero-links">
+      <a href="architecture.html">📐 全景架构（概览版）</a>
+      <a href="#pipeline">🔬 开始深入</a>
+    </div>
+  </div>
+</header>
+
+<!-- ═══════════════════════════════════════════ -->
+<!-- 1. MAIN PIPELINE                           -->
+<!-- ═══════════════════════════════════════════ -->
+<section id="pipeline">
+<div class="container">
+  <h2 class="section-title fade-in"><span>01</span> 主管线 — runReview()</h2>
+  <p class="section-sub fade-in">审查运行的完整生命周期，从输入到输出的每一步</p>
+
+  <!-- Input/Output -->
+  <div class="two-col fade-in">
+    <div class="card">
+      <h3><span class="icon" style="background:rgba(66,99,235,.1);color:var(--accent)">📥</span> RunReviewInput</h3>
+      <table class="detail">
+        <tr><td><code>runId</code></td><td>string — 唯一运行 ID</td></tr>
+        <tr><td><code>contextId</code></td><td>string — 关联的 PR 上下文 ID</td></tr>
+        <tr><td><code>prContext</code></td><td>PRContext — 完整 PR 元数据</td></tr>
+        <tr><td><code>config</code></td><td>ServerConfig — 服务器配置</td></tr>
+        <tr><td><code>repoRoot</code></td><td>string — 仓库文件系统根路径</td></tr>
+        <tr><td><code>goal?</code></td><td>string — 自定义审查目标</td></tr>
+        <tr><td><code>planOnly?</code></td><td>boolean — 仅规划不执行</td></tr>
+        <tr><td><code>checkSummary?</code></td><td>CheckSummary — CI 检查结果</td></tr>
+        <tr><td><code>abortSignal?</code></td><td>AbortSignal — 取消信号</td></tr>
+        <tr><td><code>onEvent?</code></td><td>(event: RunEvent) => void — 事件回调</td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <h3><span class="icon" style="background:rgba(12,166,120,.1);color:var(--accent2)">📤</span> RunReviewResult</h3>
+      <table class="detail">
+        <tr><td><code>findings</code></td><td>ReviewFinding[] — 结构化审查发现</td></tr>
+        <tr><td><code>tasks</code></td><td>TaskExecutionRecord[] — 任务执行记录</td></tr>
+        <tr><td><code>raw</code></td><td>TeamRunResult — OMA 编排器原始输出</td></tr>
+      </table>
+      <h3 style="margin-top:20px"><span class="icon" style="background:rgba(224,49,49,.1);color:var(--red)">⚠️</span> 错误处理</h3>
+      <ul>
+        <li>非 abort 错误 → 发射 <code>run.failed</code> 事件</li>
+        <li>始终调用 <code>runtime.orchestrator.shutdown()</code></li>
+        <li>abort 时静默退出，不发射 failed</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Pipeline Steps -->
+  <div class="card fade-in" style="margin-top:8px">
+    <h3><span class="icon" style="background:rgba(112,72,232,.1);color:var(--purple)">🔄</span> runReview() 10 步管线</h3>
+    <div class="step-list">
+      <div class="step-item"><div class="step-body"><h4>发射 run.started 事件</h4><p>payload: <code>{context_id, planOnly}</code>，event_id 为 <code>randomUUID().slice(0,16)</code></p></div></div>
+      <div class="step-item"><div class="step-body"><h4>buildStaticReviewContext(prContext)</h4><p>同步执行 4 步：classifyFiles → scorePriorities → runAllEvidenceRules → generateContextTasks。返回 <code>{classifications, evidence, contextTasks}</code></p></div></div>
+      <div class="step-item"><div class="step-body"><h4>buildReviewPackage(...)</h4><p>Token 感知打包：选取 top-40 文件，压缩 Diff，创建 4 个 Agent Scope（含 allowedFiles、预算、证据、任务）</p></div></div>
+      <div class="step-item"><div class="step-body"><h4>buildReviewGoalPrompt(...)</h4><p>组装目标字符串：默认目标 + PR 摘要 + ReviewPackage JSON。默认 goal: <code>"Review this PR for security issues, test coverage, config risk, and code quality."</code></p></div></div>
+      <div class="step-item"><div class="step-body"><h4>createReviewTeam(...)</h4><p>创建 OMA 运行时：LLM 适配器、每个 Agent 的作用域工具集、编排器实例、Synthesis Prompt 补丁</p></div></div>
+      <div class="step-item"><div class="step-body"><h4>runtime.orchestrator.runTeam(...)</h4><p>设置 Coordinator 的 systemPrompt、model、adapter。传入 <code>revealCoordinator: true</code>、<code>planOnly</code>、<code>abortSignal</code></p></div></div>
+      <div class="step-item"><div class="step-body"><h4>extractFindings(raw)</h4><p>三级提取策略（详见下方）</p></div></div>
+      <div class="step-item"><div class="step-body"><h4>发射 run.completed 事件</h4><p>payload: <code>{findings, tasks, planOnly, success}</code></p></div></div>
+      <div class="step-item"><div class="step-body"><h4>返回 RunReviewResult</h4><p><code>{findings, tasks, raw}</code></p></div></div>
+      <div class="step-item"><div class="step-body"><h4>shutdown()</h4><p>在 finally 块中调用 <code>runtime.orchestrator.shutdown()</code> 释放资源</p></div></div>
+    </div>
+  </div>
+
+  <!-- Event ID generation -->
+  <div class="card fade-in">
+    <h3><span class="icon" style="background:rgba(232,89,12,.1);color:var(--orange)">🏷</span> makeRunEvent() — 事件生成</h3>
+    <pre><code>event_id: randomUUID().slice(0, 16)   // 截取前 16 字符
+created_at: new Date().toISOString()  // ISO 8601 时间戳
+// 其他字段：run_id, type, sequence, payload</code></pre>
+  </div>
+</div>
+</section>
+
+<!-- ═══════════════════════════════════════════ -->
+<!-- 2. STATIC REVIEW                           -->
+<!-- ═══════════════════════════════════════════ -->
+<section id="static" style="background:var(--surface)">
+<div class="container">
+  <h2 class="section-title fade-in"><span>02</span> 静态审查管线</h2>
+  <p class="section-sub fade-in">确定性分析：文件分类 → 优先级评分 → 证据规则 → 上下文任务 → 打包</p>
+
+  <!-- Intake -->
+  <div class="card fade-in">
+    <h3><span class="icon" style="background:rgba(66,99,235,.1);color:var(--accent)">📂</span> 文件分类 — classifyFile()</h3>
+    <p style="margin-bottom:12px">分类优先级：路径模式 → 配置文件名 → 扩展名映射 → 默认 other</p>
+    <div class="two-col">
+      <div>
+        <h4 style="font-size:.85rem;margin-bottom:8px">路径模式（最高优先级）</h4>
+        <table class="detail">
+          <tr><td><code>tests?/</code>, <code>__tests__/</code>, <code>spec/</code></td><td><span class="tag tag-green">test</span></td></tr>
+          <tr><td><code>.github/workflows/</code>, <code>ci/</code>, <code>.gitlab-ci</code></td><td><span class="tag tag-orange">ci</span></td></tr>
+          <tr><td><code>build/</code>, <code>Dockerfile</code>, <code>Makefile</code></td><td><span class="tag tag-purple">build</span></td></tr>
+          <tr><td><code>docs?/</code></td><td><span class="tag tag-cyan">doc</span></td></tr>
+          <tr><td><code>node_modules/</code>, <code>dist/</code></td><td><span class="tag">other</span></td></tr>
+        </table>
+      </div>
+      <div>
+        <h4 style="font-size:.85rem;margin-bottom:8px">扩展名映射</h4>
+        <table class="detail">
+          <tr><td><code>.ts .tsx .js .jsx .py .go .rs .java</code></td><td><span class="tag tag-blue">source</span></td></tr>
+          <tr><td><code>.test.ts .spec.tsx .test.py _test.go</code></td><td><span class="tag tag-green">test</span></td></tr>
+          <tr><td><code>.json .yaml .yml .toml .ini</code></td><td><span class="tag tag-orange">config</span></td></tr>
+          <tr><td><code>.md .rst .txt</code></td><td><span class="tag tag-cyan">doc</span></td></tr>
+        </table>
+        <h4 style="font-size:.85rem;margin:16px 0 8px">配置文件名集合</h4>
+        <p><code>package.json</code> <code>tsconfig.json</code> <code>pyproject.toml</code> <code>Cargo.toml</code> <code>go.mod</code> <code>.eslintrc</code> <code>jest.config</code> <code>vite.config</code> 等 18 个</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Priority -->
+  <div class="card fade-in">
+    <h3><span class="icon" style="background:rgba(240,140,0,.1);color:var(--yellow)">📊</span> 优先级评分 — scorePriority()</h3>
+    <p style="margin-bottom:12px">算法：<code>base + sizeBoost + riskBoost + newFileBoost</code>，钳制到 [0, 100]</p>
+    <div class="two-col">
+      <div>
+        <h4 style="font-size:.85rem;margin-bottom:8px">类别基础分</h4>
+        <table class="detail">
+          <tr><td>source</td><td><strong>60</strong></td></tr>
+          <tr><td>ci</td><td><strong>45</strong></td></tr>
+          <tr><td>config</td><td><strong>40</strong></td></tr>
+          <tr><td>build</td><td><strong>35</strong></td></tr>
+          <tr><td>test</td><td><strong>30</strong></td></tr>
+          <tr><td>other</td><td><strong>20</strong></td></tr>
+          <tr><td>doc</td><td><strong>10</strong></td></tr>
+        </table>
+      </div>
+      <div>
+        <h4 style="font-size:.85rem;margin-bottom:8px">加权规则</h4>
+        <table class="detail">
+          <tr><td>变更行数 > 200</td><td><strong>+15</strong></td></tr>
+          <tr><td>变更行数 > 100</td><td><strong>+10</strong></td></tr>
+          <tr><td>变更行数 > 50</td><td><strong>+5</strong></td></tr>
+          <tr><td>新增文件（无删除）</td><td><strong>+5</strong></td></tr>
+        </table>
+        <h4 style="font-size:.85rem;margin:16px 0 8px">风险模式加权（文件名匹配）</h4>
+        <table class="detail">
+          <tr><td><code>auth|login|token|jwt|oauth</code></td><td><strong>+15</strong></td></tr>
+          <tr><td><code>password|secret|credential|key</code></td><td><strong>+15</strong></td></tr>
+          <tr><td><code>inject|sql|query|exec|eval</code></td><td><strong>+12</strong></td></tr>
+          <tr><td><code>permission|role|access|acl</code></td><td><strong>+10</strong></td></tr>
+          <tr><td><code>middleware|interceptor|filter</code></td><td><strong>+8</strong></td></tr>
+          <tr><td><code>upload|download|file|stream</code></td><td><strong>+8</strong></td></tr>
+          <tr><td><code>api|route|endpoint|handler</code></td><td><strong>+5</strong></td></tr>
+          <tr><td><code>config|env|setting</code></td><td><strong>+5</strong></td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Evidence Rules -->
+  <div class="card fade-in">
+    <h3><span class="icon" style="background:rgba(224,49,49,.1);color:var(--red)">🔍</span> 证据规则引擎 — 10 条规则</h3>
+    <p style="margin-bottom:12px">对每个文件的每个 Hunk 的每一行执行正则匹配。<code>matchOn: 'added'</code> 仅匹配新增行，<code>'any'</code> 匹配所有行。去重键: <code>${file}:${type}:${line}</code></p>
+    <table class="detail">
+      <thead><tr><th>规则 ID</th><th>严重性</th><th>匹配</th><th>正则模式</th></tr></thead>
+      <tbody>
+        <tr><td><code>hardcoded_secret</code></td><td><span class="sev sev-high">high</span></td><td>added</td><td><code>(?:password|secret|api_key|token|credential)\s*[:=]\s*["'][^"']{8,}["']</code></td></tr>
+        <tr><td><code>sql_injection</code></td><td><span class="sev sev-high">high</span></td><td>added</td><td><code>(?:query|execute|raw)\s*\(\s*[`"'].*\$\{</code></td></tr>
+        <tr><td><code>eval_exec</code></td><td><span class="sev sev-medium">medium</span></td><td>added</td><td><code>\b(?:eval|exec)\s*\(</code></td></tr>
+        <tr><td><code>unsafe_cast</code></td><td><span class="sev sev-medium">medium</span></td><td>added</td><td><code>\bas\s+(?:any|unknown)\b</code></td></tr>
+        <tr><td><code>missing_await</code></td><td><span class="sev sev-medium">medium</span></td><td>added</td><td><code>(?:return\s+)?(?!await\s)\w+\.\w+(?:Async|async)\s*\(</code></td></tr>
+        <tr><td><code>missing_error_handling</code></td><td><span class="sev sev-low">low</span></td><td>added</td><td><code>^\s*await\s+.*\(.*\)\s*;?\s*$</code></td></tr>
+        <tr><td><code>deprecated_api</code></td><td><span class="sev sev-low">low</span></td><td>any</td><td><code>@deprecated|\.deprecated\b</code></td></tr>
+        <tr><td><code>hardcoded_url</code></td><td><span class="sev sev-low">low</span></td><td>added</td><td><code>https?://(?:localhost|127\.0\.0\.1|10\.\d+)</code></td></tr>
+        <tr><td><code>console_log</code></td><td><span class="sev sev-info">info</span></td><td>added</td><td><code>console\.(log|debug|info|warn|error)\s*\(</code></td></tr>
+        <tr><td><code>todo_fixme</code></td><td><span class="sev sev-info">info</span></td><td>added</td><td><code>//\s*(?:TODO|FIXME|HACK|XXX|TEMP)\b</code></td></tr>
+      </tbody>
+    </table>
+    <p style="margin-top:8px"><strong>lineOffset 计算：</strong>仅对 added/removed 行递增，unchanged 行不计数，确保报告的行号对应 Diff 中的实际变更位置。</p>
+  </div>
+
+  <!-- Context Tasks -->
+  <div class="card fade-in">
+    <h3><span class="icon" style="background:rgba(16,152,173,.1);color:var(--cyan)">📋</span> 上下文任务规划 — generateContextTasks()</h3>
+    <p>将证据信号按任务类型分组，生成 <code>ContextTask</code> 对象供 Agent 使用。检测源文件与测试文件的命名约定关联（如 <code>foo.ts</code> ↔ <code>foo.test.ts</code>）。全局限制：evidence ≤ 40，contextTasks ≤ 20。</p>
+  </div>
+
+  <!-- Package -->
+  <div class="card fade-in">
+    <h3><span class="icon" style="background:rgba(112,72,232,.1);color:var(--purple)">📦</span> Token 感知打包 — buildReviewPackage()</h3>
+    <div class="two-col">
+      <div>
+        <h4 style="font-size:.85rem;margin-bottom:8px">Diff 压缩常量</h4>
+        <table class="detail">
+          <tr><td><code>MAX_PACKAGE_FILES</code></td><td>40</td></tr>
+          <tr><td><code>MAX_AGENT_FILES</code></td><td>18</td></tr>
+          <tr><td><code>MAX_HUNKS_PER_FILE</code></td><td>4</td></tr>
+          <tr><td><code>MAX_CHANGED_LINES_PER_HUNK</code></td><td>24</td></tr>
+          <tr><td><code>MAX_LINE_CHARS</code></td><td>220</td></tr>
+        </table>
+      </div>
+      <div>
+        <h4 style="font-size:.85rem;margin-bottom:8px">compactFile() 处理</h4>
+        <ul>
+          <li>每个文件最多保留 4 个 Hunk</li>
+          <li>每个 Hunk 最多 24 行变更（仅 added/removed）</li>
+          <li>每行内容截断到 220 字符</li>
+          <li>记录 omitted_lines 和 omitted_hunks</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- Agent Scopes -->
+  <div class="card fade-in">
+    <h3><span class="icon" style="background:rgba(12,166,120,.1);color:var(--accent2)">🎯</span> 4 个 Agent Scope 配置</h3>
+    <table class="detail">
+      <thead><tr><th>Agent</th><th>Focus</th><th>文件选择</th><th>文件数</th><th>搜索数</th><th>Token</th><th>搜索扩展</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>security-reviewer</code></td>
+          <td>Auth, injection, secrets, trust boundaries</td>
+          <td>securityFiles（匹配 SECURITY_PATH 或 priority≥65）</td>
+          <td><strong>14</strong></td><td><strong>10</strong></td><td><strong>100K</strong></td>
+          <td>src, server, app, api, routes, middleware, config</td>
+        </tr>
+        <tr>
+          <td><code>test-context-analyzer</code></td>
+          <td>Missing coverage, weak assertions, regression</td>
+          <td>sourceFiles(0:12) + testFiles(0:8)</td>
+          <td><strong>22</strong></td><td><strong>14</strong></td><td><strong>140K</strong></td>
+          <td>test, tests, __tests__, spec, specs</td>
+        </tr>
+        <tr>
+          <td><code>config-reviewer</code></td>
+          <td>Deps, env vars, CI/CD, build, deployment</td>
+          <td>configFiles（config/build/ci 类别或匹配 CONFIG_PATH）</td>
+          <td><strong>12</strong></td><td><strong>8</strong></td><td><strong>80K</strong></td>
+          <td>.github, config, scripts</td>
+        </tr>
+        <tr>
+          <td><code>code-quality-reviewer</code></td>
+          <td>Correctness, error handling, complexity, types</td>
+          <td>qualityFiles（source 类别或 priority≥60）</td>
+          <td><strong>18</strong></td><td><strong>12</strong></td><td><strong>120K</strong></td>
+          <td>src, server, frontend, lib, app</td>
+        </tr>
+      </tbody>
+    </table>
+    <p style="margin-top:8px">每个 Scope 还包含：<code>allowedFiles</code>（精确文件列表）、<code>searchPathScopes</code>（目录前缀）、<code>evidence</code>（≤25 条）、<code>contextTasks</code>（≤10 条，每条 evidence≤15）。</p>
+  </div>
+</div>
+</section>
+
+<!-- ═══════════════════════════════════════════ -->
+<!-- 3. AGENT DESIGN                            -->
+<!-- ═══════════════════════════════════════════ -->
+<section id="agents">
+<div class="container">
+  <h2 class="section-title fade-in"><span>03</span> Agent 团队设计</h2>
+  <p class="section-sub fade-in">1 Coordinator + 4 专业 Agent 的完整 Prompt 设计、检查清单与输出格式</p>
+
+  <!-- Coordinator -->
+  <div class="card fade-in">
+    <h3><span class="icon" style="background:rgba(112,72,232,.1);color:var(--purple)">🧠</span> Coordinator Prompt 设计</h3>
+    <div class="step-list">
+      <div class="step-item"><div class="step-body"><h4>任务分解指令</h4><p>将审查目标分解为聚焦的、可并行的子任务。根据 PR 变更内容决定分配给哪些 Agent。</p></div></div>
+      <div class="step-item"><div class="step-body"><h4>任务指令规范</h4><p>每个任务必须包含：来自 agentScopes 的具体文件、要查找的具体模式/行为、使用的工具（read_file_patch / search_diff / read_repo_file / search_tests_for）、重试控制（maxRetries: 2, retryDelayMs: 10000, retryBackoff: 2）</p></div></div>
+      <div class="step-item"><div class="step-body"><h4>最终综合</h4><p>以 <code>```json</code> 代码围栏结束，输出 JSON 数组。字段：file, line, severity, category, title, description, evidence, suggestion。合并子 Agent 发现。无问题则输出 <code>[]</code>。</p></div></div>
+      <div class="step-item"><div class="step-body"><h4>中文强制</h4><p>所有文本必须使用简体中文。通过 Coordinator Prompt 和 Synthesis Prompt 双重约束。</p></div></div>
+    </div>
+  </div>
+
+  <!-- Goal Prompt -->
+  <div class="card fade-in">
+    <h3><span class="icon" style="background:rgba(66,99,235,.1);color:var(--accent)">🎯</span> Goal Prompt 结构</h3>
+    <pre><code>{goal}
+
+PR context summary:
+{owner/repo#number: title, author, branches, sha, description, file list}
+
+Token-aware review package:
+{JSON.stringify(reviewPackage, null, 2)}
+
+Assign reviewer tasks only within the package agentScopes.
+Prefer scoped tool calls over broad repository exploration.
+Produce concise, evidence-backed findings.</code></pre>
+  </div>
+
+  <!-- 4 Agents -->
+  <div class="two-col fade-in">
+    <!-- Security -->
+    <div class="card" style="border-top:3px solid var(--red)">
+      <h3><span class="icon" style="background:rgba(224,49,49,.1);color:var(--red)">🛡</span> security-reviewer</h3>
+      <p><strong>上下文窗口：</strong>256,000 tokens</p>
+      <p><strong>温度：</strong>0</p>
+      <p style="margin-top:10px"><strong>检查清单（6 项）：</strong></p>
+      <ul>
+        <li><strong>认证授权</strong> — 缺失/可绕过的 auth 检查、角色/权限检查</li>
+        <li><strong>注入攻击</strong> — SQL、命令、XSS、模板注入；查询中的字符串插值、HTML 中未消毒的用户输入</li>
+        <li><strong>密钥泄露</strong> — 硬编码 API key、密码、token、连接字符串</li>
+        <li><strong>数据暴露</strong> — API 响应中的敏感字段、日志、错误消息、调试输出</li>
+        <li><strong>信任边界</strong> — API 边界缺失输入验证、不安全反序列化、SSRF、路径穿越</li>
+        <li><strong>密码学</strong> — 弱算法、硬编码 IV、缺失签名验证</li>
+      </ul>
+      <p style="margin-top:10px"><strong>工具使用：</strong><code>read_file_patch</code>, <code>search_diff</code>("password","token","eval","exec","innerHTML"), <code>read_repo_file</code>(auth 中间件), <code>search_repo</code>(追踪用户输入流)</p>
+      <p><strong>输出类别：</strong><code>"security"</code></p>
+    </div>
+
+    <!-- Test -->
+    <div class="card" style="border-top:3px solid var(--green)">
+      <h3><span class="icon" style="background:rgba(47,158,68,.1);color:var(--green)">🧪</span> test-context-analyzer</h3>
+      <p><strong>上下文窗口：</strong>128,000 tokens</p>
+      <p><strong>温度：</strong>0</p>
+      <p style="margin-top:10px"><strong>检查清单（6 项）：</strong></p>
+      <ul>
+        <li><strong>缺失覆盖</strong> — 新函数/分支/错误路径无测试，使用 <code>search_tests_for</code></li>
+        <li><strong>弱断言</strong> — 仅 truthiness 检查、过于宽泛的 matcher（<code>toBeDefined</code>）</li>
+        <li><strong>回归风险</strong> — 行为变更影响现有测试依赖</li>
+        <li><strong>边界情况</strong> — 错误路径、边界条件、null/undefined、空集合</li>
+        <li><strong>测试质量</strong> — 隔离性、有意义的描述、适当的 mock</li>
+        <li><strong>集成缺口</strong> — API 契约变更无集成测试更新</li>
+      </ul>
+      <p style="margin-top:10px"><strong>工具使用：</strong><code>search_tests_for</code>, <code>read_repo_file</code>, <code>read_file_patch</code>, <code>search_repo</code></p>
+      <p><strong>输出类别：</strong><code>"test-coverage"</code></p>
+    </div>
+
+    <!-- Config -->
+    <div class="card" style="border-top:3px solid var(--orange)">
+      <h3><span class="icon" style="background:rgba(232,89,12,.1);color:var(--orange)">⚙️</span> config-reviewer</h3>
+      <p><strong>上下文窗口：</strong>128,000 tokens</p>
+      <p><strong>温度：</strong>0</p>
+      <p style="margin-top:10px"><strong>检查清单（6 项）：</strong></p>
+      <ul>
+        <li><strong>依赖</strong> — 漏洞版本、不必要依赖、许可证风险、过宽版本范围（<code>*</code>, <code>latest</code>）</li>
+        <li><strong>环境变量</strong> — 新 env var、文档、安全默认值、密钥泄露到构建输出</li>
+        <li><strong>CI/CD</strong> — 未固定 action 版本（无 SHA）、日志中的密钥、缺失权限限制</li>
+        <li><strong>构建配置</strong> — 生产环境 source map、debug 模式启用、不安全的 dev server</li>
+        <li><strong>部署风险</strong> — 数据库迁移、基础设施变更、feature flags、回滚安全性</li>
+        <li><strong>CORS & CSP</strong> — 安全头、过于宽松的 CORS origins</li>
+      </ul>
+      <p style="margin-top:10px"><strong>工具使用：</strong><code>read_file_patch</code>, <code>search_diff</code>("version","secret","env","CORS"), <code>read_repo_file</code>, <code>read_repo_manifest</code></p>
+      <p><strong>输出类别：</strong><code>"config"</code></p>
+    </div>
+
+    <!-- Quality -->
+    <div class="card" style="border-top:3px solid var(--cyan)">
+      <h3><span class="icon" style="background:rgba(16,152,173,.1);color:var(--cyan)">💎</span> code-quality-reviewer</h3>
+      <p><strong>上下文窗口：</strong>128,000 tokens</p>
+      <p><strong>温度：</strong>0</p>
+      <p style="margin-top:10px"><strong>检查清单（7 项）：</strong></p>
+      <ul>
+        <li><strong>正确性 Bug</strong> — 差一错误、null/undefined 解引用、竞态条件、错误逻辑、错误返回类型</li>
+        <li><strong>错误处理</strong> — 吞没异常（<code>catch {}</code>）、缺失错误传播、泛化 catch</li>
+        <li><strong>API 契约</strong> — 函数签名/返回类型/行为变更、破坏性变更文档</li>
+        <li><strong>资源泄漏</strong> — 未关闭的文件句柄、DB 连接、事件监听器、定时器、缺失 <code>finally</code></li>
+        <li><strong>复杂度</strong> — 函数 >50 行、深度嵌套、圈复杂度 >10、重复逻辑</li>
+        <li><strong>类型安全</strong> — <code>as any</code>、<code>@ts-ignore</code>、类型信息丢失、隐式 <code>any</code></li>
+        <li><strong>一致性</strong> — 本地编码模式、命名约定、import 风格</li>
+      </ul>
+      <p style="margin-top:10px"><strong>工具使用：</strong><code>read_file_patch</code>, <code>read_repo_file</code>, <code>search_repo</code>(函数调用追踪), <code>search_diff</code>("as any","catch","TODO","FIXME")</p>
+      <p><strong>输出类别：</strong><code>"code-quality"</code></p>
+    </div>
+  </div>
+
+  <!-- Agent Config Details -->
+  <div class="card fade-in">
+    <h3><span class="icon" style="background:rgba(112,72,232,.1);color:var(--purple)">⚙️</span> createReviewAgentConfigs() 配置细节</h3>
+    <table class="detail">
+      <thead><tr><th>字段</th><th>security-reviewer</th><th>其他 Agent</th></tr></thead>
+      <tbody>
+        <tr><td><code>contextWindowTokens</code></td><td>256,000</td><td>128,000</td></tr>
+        <tr><td><code>provider</code></td><td colspan="2"><code>'openai'</code></td></tr>
+        <tr><td><code>temperature</code></td><td colspan="2"><code>0</code></td></tr>
+        <tr><td><code>systemPrompt</code></td><td colspan="2">Agent Prompt + Scope 后缀（focus + 作用域指令）</td></tr>
+        <tr><td><code>contextStrategy</code></td><td colspan="2">buildCompressionStrategy(adapter, model, 'subagent', config)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Synthesis Patch -->
+  <div class="card fade-in">
+    <h3><span class="icon" style="background:rgba(214,51,108,.1);color:var(--pink)">🔧</span> Synthesis Prompt 补丁</h3>
+    <p>Monkey-patch <code>orchestrator.buildSynthesisPrompt</code>，在原始输出后追加：</p>
+    <ul>
+      <li>必须以 <code>```json</code> 代码围栏结尾</li>
+      <li>每个 finding 包含 8 个字段：file, line, severity, category, title, description, evidence, suggestion</li>
+      <li>severity 枚举：critical, high, medium, low, info</li>
+      <li>category 枚举：security, test-coverage, code-quality, config, performance, documentation</li>
+      <li>无问题时输出空数组 <code>[]</code></li>
+      <li>禁止以散文形式输出 findings</li>
+      <li>所有文本必须使用简体中文</li>
+    </ul>
+  </div>
+</div>
+</section>
+
+<!-- ═══════════════════════════════════════════ -->
+<!-- 4. TOOLS IMPLEMENTATION                    -->
+<!-- ═══════════════════════════════════════════ -->
+<section id="tools" style="background:var(--surface)">
+<div class="container">
+  <h2 class="section-title fade-in"><span>04</span> 工具实现细节</h2>
+  <p class="section-sub fade-in">作用域强制、路径安全、Token 预算的底层实现</p>
+
+  <!-- Scope -->
+  <div class="two-col fade-in">
+    <div class="card">
+      <h3><span class="icon" style="background:rgba(66,99,235,.1);color:var(--accent)">🔒</span> 作用域强制 — scope.ts</h3>
+      <pre><code>// 核心判断逻辑
+isPathAllowedByScope(path, scope):
+  if scope == null → true
+  if allowedFiles 为空 AND searchPathScopes 为空 → true
+  → exact match in allowedFiles
+  OR any scope where isInsideScope(path, scope)
+
+isInsideScope(path, scope):
+  normalizedPath === normalizedScope
+  OR startsWith(normalizedScope + "/")</code></pre>
+      <p style="margin-top:8px"><code>normalizePath()</code>：将 <code>\</code> 替换为 <code>/</code>，移除前导 <code>./</code> 或 <code>/</code></p>
+    </div>
+
+    <div class="card">
+      <h3><span class="icon" style="background:rgba(224,49,49,.1);color:var(--red)">🛡</span> 路径安全 — security.ts</h3>
+      <pre><code>// 路径穿越防护
+resolveSafePath(repoRoot, requestedPath):
+  resolved = path.resolve(repoRoot, requestedPath)
+  relative = path.relative(repoRoot, resolved)
+  if relative.startsWith("..") || path.isAbsolute(relative)
+    → return null  // 拒绝
+  → return resolved</code></pre>
+      <h4 style="font-size:.82rem;margin:12px 0 6px">敏感文件拦截</h4>
+      <p><code>SENSITIVE_PATTERNS</code>：<code>.env</code> <code>private_key</code> <code>id_rsa</code> <code>.pem</code> <code>.key</code> <code>credentials</code> <code>secret</code></p>
+      <h4 style="font-size:.82rem;margin:12px 0 6px">忽略目录</h4>
+      <p><code>.git</code> <code>node_modules</code> <code>dist</code> <code>build</code> <code>coverage</code> <code>.venv</code> <code>__pycache__</code> <code>.next</code> <code>target</code> <code>vendor</code> 等 16 个</p>
+    </div>
+  </div>
+
+  <!-- Budget -->
+  <div class="card fade-in">
+    <h3><span class="icon" style="background:rgba(240,140,0,.1);color:var(--yellow)">💰</span> Token 预算系统 — budget.ts</h3>
+    <div class="two-col">
+      <div>
+        <h4 style="font-size:.85rem;margin-bottom:8px">ToolBudget 接口</h4>
+        <table class="detail">
+          <tr><td><code>maxFiles</code></td><td>最大文件读取次数</td></tr>
+          <tr><td><code>maxSearches</code></td><td>最大搜索次数</td></tr>
+          <tr><td><code>maxTokens</code></td><td>最大 Token 消耗</td></tr>
+        </table>
+        <h4 style="font-size:.85rem;margin:16px 0 8px">ToolUsage 接口</h4>
+        <table class="detail">
+          <tr><td><code>fileReadCount</code></td><td>已读取文件数</td></tr>
+          <tr><td><code>searchCount</code></td><td>已执行搜索数</td></tr>
+          <tr><td><code>approximateTokens</code></td><td>已消耗 Token 估算</td></tr>
+        </table>
+      </div>
+      <div>
+        <h4 style="font-size:.85rem;margin-bottom:8px">默认预算</h4>
+        <pre><code>{
+  maxFiles: 100,
+  maxSearches: 50,
+  maxTokens: 500_000
+}</code></pre>
+        <h4 style="font-size:.85rem;margin:16px 0 8px">检查函数</h4>
+        <ul>
+          <li><code>checkFileBudget</code> — usage.fileReadCount &lt; budget.maxFiles</li>
+          <li><code>checkSearchBudget</code> — usage.searchCount &lt; budget.maxSearches</li>
+          <li><code>checkTokenBudget</code> — usage.tokens + estimated ≤ budget.maxTokens</li>
+        </ul>
+        <h4 style="font-size:.85rem;margin:16px 0 8px">Token 估算</h4>
+        <p>CJK 字符：1 字符 ≈ 1 token<br>英文：4 字符 ≈ 1 token<br>取两者最大值</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 9 Tools -->
+  <div class="card fade-in">
+    <h3><span class="icon" style="background:rgba(12,166,120,.1);color:var(--accent2)">🔧</span> 9 个工具的安全检查链</h3>
+    <table class="detail">
+      <thead><tr><th>工具</th><th>作用域</th><th>路径安全</th><th>敏感文件</th><th>忽略目录</th><th>文件预算</th><th>搜索预算</th><th>Token 预算</th><th>行数限制</th></tr></thead>
+      <tbody>
+        <tr><td><code>read_file_patch</code></td><td>✅</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+        <tr><td><code>search_diff</code></td><td>✅</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+        <tr><td><code>read_repo_file</code></td><td>✅</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td><td>—</td><td>✅</td><td>50 行</td></tr>
+        <tr><td><code>search_repo</code></td><td>✅</td><td>✅</td><td>✅</td><td>✅</td><td>—</td><td>✅</td><td>—</td><td>50 结果</td></tr>
+        <tr><td><code>search_tests_for</code></td><td>—</td><td>✅</td><td>—</td><td>✅</td><td>—</td><td>✅</td><td>—</td><td>—</td></tr>
+        <tr><td><code>read_repo_manifest</code></td><td>—</td><td>✅</td><td>—</td><td>—</td><td>✅</td><td>—</td><td>—</td><td>—</td></tr>
+        <tr><td><code>read_check_summary</code></td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+        <tr><td><code>verify_repo_context</code></td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+        <tr><td><code>todo_write</code></td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+</section>
+
+<!-- ═══════════════════════════════════════════ -->
+<!-- 5. COMPRESSION                             -->
+<!-- ═══════════════════════════════════════════ -->
+<section id="compression">
+<div class="container">
+  <h2 class="section-title fade-in"><span>05</span> 上下文压缩系统</h2>
+  <p class="section-sub fade-in">四层压缩管线，管理 Agent 的 128K 上下文窗口</p>
+
+  <div class="pipeline fade-in">
+    <div class="pipe-step">
+      <div class="pipe-icon">🔧</div>
+      <h5>Repair</h5>
+      <p>修复孤立的 tool_use / tool_result 配对</p>
+    </div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-step">
+      <div class="pipe-icon">📦</div>
+      <h5>Micro-Compact</h5>
+      <p>替换旧的大工具结果为占位符</p>
+    </div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-step">
+      <div class="pipe-icon">🤖</div>
+      <h5>Auto-Compact</h5>
+      <p>LLM 摘要压缩</p>
+    </div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-step">
+      <div class="pipe-icon">📋</div>
+      <h5>Recent Select</h5>
+      <p>选择最近消息</p>
+    </div>
+  </div>
+
+  <!-- Config -->
+  <div class="two-col fade-in">
+    <div class="card">
+      <h3><span class="icon" style="background:rgba(66,99,235,.1);color:var(--accent)">⚙️</span> 压缩配置</h3>
+      <table class="detail">
+        <thead><tr><th>字段</th><th>默认值</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td><code>enabled</code></td><td>true</td><td>主开关</td></tr>
+          <tr><td><code>microCompactEnabled</code></td><td>true</td><td>微压缩开关</td></tr>
+          <tr><td><code>autoCompactEnabled</code></td><td>true</td><td>自动压缩开关</td></tr>
+          <tr><td><code>contextWindowTokens</code></td><td>128,000</td><td>上下文窗口大小</td></tr>
+          <tr><td><code>compactMaxSummaryTokens</code></td><td>4,000</td><td>摘要输出上限</td></tr>
+          <tr><td><code>autoCompactBufferTokens</code></td><td>8,000</td><td>阈值缓冲</td></tr>
+          <tr><td><code>microCompactRecentResults</code></td><td>10</td><td>保留最近 N 条工具结果</td></tr>
+          <tr><td><code>microCompactMinChars</code></td><td>8,000</td><td>替换阈值（字符）</td></tr>
+          <tr><td><code>compactRecentMessages</code></td><td>10</td><td>压缩后保留最近 N 条消息</td></tr>
+          <tr><td><code>compactMaxRetries</code></td><td>2</td><td>压缩重试次数</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="card">
+      <h3><span class="icon" style="background:rgba(112,72,232,.1);color:var(--purple)">📐</span> 压缩触发逻辑</h3>
+      <h4 style="font-size:.85rem;margin-bottom:8px">自动压缩阈值</h4>
+      <pre><code>autoCompactThreshold = contextWindowTokens
+                     - compactMaxSummaryTokens
+                     - autoCompactBufferTokens
+= 128,000 - 4,000 - 8,000
+= 116,000 tokens</code></pre>
+      <h4 style="font-size:.85rem;margin:20px 0 8px">触发条件</h4>
+      <ul>
+        <li><strong>Micro-Compact</strong>：<code>enabled</code> AND <code>estimatedTokens > 10,000</code></li>
+        <li><strong>Auto-Compact</strong>：<code>enabled</code> AND <code>currentTokens > 116,000</code></li>
+      </ul>
+      <h4 style="font-size:.85rem;margin:20px 0 8px">Auto-Compact 结果</h4>
+      <pre><code>messages = [
+  { role: 'user', content: [{
+    type: 'text',
+    text: '[Context Summary]\n{summary}'
+  }] },
+  ...recentMessages  // 最近 10 条
+]</code></pre>
+    </div>
+  </div>
+
+  <!-- Micro-Compact detail -->
+  <div class="card fade-in">
+    <h3><span class="icon" style="background:rgba(232,89,12,.1);color:var(--orange)">📦</span> Micro-Compact 详细逻辑</h3>
+    <ul>
+      <li>保留最近 <code>microCompactRecentResults</code>（10）条工具结果不变</li>
+      <li>对更早的工具结果，如果内容长度 > <code>microCompactMinChars</code>（8000 字符），替换为 <code>[Tool result omitted: {n} chars]</code> 占位符</li>
+      <li>仅在估算 Token > 10,000 时触发</li>
+      <li>不影响 tool_use 消息，仅替换 tool_result 内容</li>
+    </ul>
+  </div>
+</div>
+</section>
+
+<!-- ═══════════════════════════════════════════ -->
+<!-- 6. STREAMING                               -->
+<!-- ═══════════════════════════════════════════ -->
+<section id="streaming" style="background:var(--surface)">
+<div class="container">
+  <h2 class="section-title fade-in"><span>06</span> 事件流与 SSE</h2>
+  <p class="section-sub fade-in">reviewState 单例、SSE 推送、事件回放与断线重连</p>
+
+  <div class="two-col fade-in">
+    <div class="card">
+      <h3><span class="icon" style="background:rgba(66,99,235,.1);color:var(--accent)">📡</span> reviewState 单例</h3>
+      <table class="detail">
+        <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td><code>runs</code></td><td>Map&lt;string, ReviewRun&gt;</td><td>活跃运行记录</td></tr>
+          <tr><td><code>eventQueues</code></td><td>Map&lt;string, RunEvent[]&gt;</td><td>内存事件缓冲</td></tr>
+          <tr><td><code>abortControllers</code></td><td>Map&lt;string, AbortController&gt;</td><td>取消控制器</td></tr>
+          <tr><td><code>subscribers</code></td><td>Map&lt;string, Set&lt;subscriber&gt;&gt;</td><td>SSE 订阅者集合</td></tr>
+          <tr><td><code>store</code></td><td>SessionStore | null</td><td>持久化存储</td></tr>
+          <tr><td><code>eventStore</code></td><td>JsonlEventStore | null</td><td>JSONL 事件存储</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="card">
+      <h3><span class="icon" style="background:rgba(12,166,120,.1);color:var(--accent2)">🔄</span> pushEvent() 三路分发</h3>
+      <div class="step-list">
+        <div class="step-item"><div class="step-body"><h4>内存队列</h4><p>推入 <code>eventQueues.get(runId)</code></p></div></div>
+        <div class="step-item"><div class="step-body"><h4>持久化</h4><p><code>store.appendEvent</code> + <code>eventStore.append</code></p></div></div>
+        <div class="step-item"><div class="step-body"><h4>SSE 推送</h4><p>遍历 <code>subscribers.get(runId)</code>，发送 JSON 字符串</p></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="two-col fade-in">
+    <div class="card">
+      <h3><span class="icon" style="background:rgba(232,89,12,.1);color:var(--orange)">🔁</span> 事件回放 — replayEvents()</h3>
+      <ul>
+        <li>合并内存队列 + store 事件 + eventStore 事件</li>
+        <li>按 <code>event_id</code> 去重</li>
+        <li>过滤 <code>sequence > afterSequence</code></li>
+        <li>按 sequence 排序</li>
+        <li>支持 <code>?after_sequence=N</code> 查询参数</li>
+        <li>支持 <code>Last-Event-ID</code> 请求头</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3><span class="icon" style="background:rgba(214,51,108,.1);color:var(--pink)">📶</span> SSE 端点细节</h3>
+      <ul>
+        <li><strong>Headers</strong>：<code>Content-Type: text/event-stream; charset=utf-8</code></li>
+        <li><strong>Cache</strong>：<code>Cache-Control: no-cache, no-transform</code></li>
+        <li><strong>Proxy</strong>：<code>X-Accel-Buffering: no</code></li>
+        <li><strong>心跳</strong>：每 15 秒发送 <code>: keep-alive\n\n</code></li>
+        <li><strong>格式</strong>：<code>id: {sequence}\ndata: {JSON}\n\n</code></li>
+        <li><strong>断开</strong>：清除心跳、取消订阅、结束响应</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Run Lifecycle -->
+  <div class="card fade-in">
+    <h3><span class="icon" style="background:rgba(112,72,232,.1);color:var(--purple)">🔄</span> 审查运行生命周期</h3>
+    <div class="pipeline">
+      <div class="pipe-step"><h5>queued</h5><p>创建 ReviewRun<br>初始化事件队列<br>创建 AbortController</p></div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-step"><h5>running</h5><p>queueMicrotask 触发<br>runReview() 开始执行</p></div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-step"><h5>completed</h5><p>存储 findings/tasks<br>设置 completed_at</p></div>
+    </div>
+    <p style="text-align:center;color:var(--muted);font-size:.82rem;margin-top:8px">失败路径：running → failed（存储 error）<br>取消路径：running → cancelled（abort signal）</p>
+  </div>
+</div>
+</section>
+
+<!-- ═══════════════════════════════════════════ -->
+<!-- 7. DATA STRUCTURES                         -->
+<!-- ═══════════════════════════════════════════ -->
+<section id="types">
+<div class="container">
+  <h2 class="section-title fade-in"><span>07</span> 核心数据结构</h2>
+  <p class="section-sub fade-in">PRContext、ReviewFinding、RunEvent 等关键类型的完整字段定义</p>
+
+  <div class="two-col fade-in">
+    <div class="card">
+      <h3><span class="icon" style="background:rgba(66,99,235,.1);color:var(--accent)">📄</span> PRContext</h3>
+      <table class="detail">
+        <tr><td><code>context_id</code></td><td>string — <code>owner/repo/pull/number</code></td></tr>
+        <tr><td><code>owner</code></td><td>string</td></tr>
+        <tr><td><code>repo</code></td><td>string</td></tr>
+        <tr><td><code>pull_number</code></td><td>number</td></tr>
+        <tr><td><code>title</code></td><td>string</td></tr>
+        <tr><td><code>description</code></td><td>string — 默认 ''</td></tr>
+        <tr><td><code>author</code></td><td>string — 默认 'unknown'</td></tr>
+        <tr><td><code>base_branch</code></td><td>string</td></tr>
+        <tr><td><code>head_branch</code></td><td>string</td></tr>
+        <tr><td><code>head_sha</code></td><td>string</td></tr>
+        <tr><td><code>files</code></td><td>PRFile[]</td></tr>
+        <tr><td><code>commits</code></td><td>CommitInfo[]</td></tr>
+        <tr><td><code>created_at</code></td><td>string — ISO 8601</td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <h3><span class="icon" style="background:rgba(12,166,120,.1);color:var(--accent2)">📄</span> PRFile & Hunk</h3>
+      <table class="detail">
+        <tr><td><code>filename</code></td><td>string</td></tr>
+        <tr><td><code>status</code></td><td>'added' | 'removed' | 'modified' | 'renamed'</td></tr>
+        <tr><td><code>additions</code></td><td>number</td></tr>
+        <tr><td><code>deletions</code></td><td>number</td></tr>
+        <tr><td><code>patch_available</code></td><td>boolean</td></tr>
+        <tr><td><code>hunks</code></td><td>Hunk[]</td></tr>
+        <tr><td><code>raw_patch?</code></td><td>string</td></tr>
+      </table>
+      <h4 style="font-size:.85rem;margin:16px 0 8px">Hunk</h4>
+      <table class="detail">
+        <tr><td><code>header</code></td><td>string — @@ 行</td></tr>
+        <tr><td><code>lines</code></td><td>HunkLine[]</td></tr>
+      </table>
+      <h4 style="font-size:.85rem;margin:16px 0 8px">HunkLine</h4>
+      <table class="detail">
+        <tr><td><code>content</code></td><td>string</td></tr>
+        <tr><td><code>type</code></td><td>'added' | 'removed' | 'unchanged' | 'header'</td></tr>
+        <tr><td><code>old_line?</code></td><td>number</td></tr>
+        <tr><td><code>new_line?</code></td><td>number</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="two-col fade-in">
+    <div class="card">
+      <h3><span class="icon" style="background:rgba(224,49,49,.1);color:var(--red)">📄</span> ReviewFinding</h3>
+      <table class="detail">
+        <tr><td><code>file</code></td><td>string</td></tr>
+        <tr><td><code>line?</code></td><td>number</td></tr>
+        <tr><td><code>severity</code></td><td>Severity</td></tr>
+        <tr><td><code>category</code></td><td>FindingCategory</td></tr>
+        <tr><td><code>title</code></td><td>string</td></tr>
+        <tr><td><code>description</code></td><td>string</td></tr>
+        <tr><td><code>evidence</code></td><td>Evidence[]</td></tr>
+        <tr><td><code>suggestion?</code></td><td>string</td></tr>
+      </table>
+      <h4 style="font-size:.85rem;margin:16px 0 8px">Severity 枚举</h4>
+      <p><span class="sev sev-critical">critical</span> <span class="sev sev-high">high</span> <span class="sev sev-medium">medium</span> <span class="sev sev-low">low</span> <span class="sev sev-info">info</span></p>
+      <h4 style="font-size:.85rem;margin:16px 0 8px">FindingCategory 枚举</h4>
+      <p><span class="tag tag-red">security</span> <span class="tag tag-green">test-coverage</span> <span class="tag tag-blue">code-quality</span> <span class="tag tag-orange">config</span> <span class="tag tag-purple">performance</span> <span class="tag tag-cyan">documentation</span></p>
+    </div>
+    <div class="card">
+      <h3><span class="icon" style="background:rgba(112,72,232,.1);color:var(--purple)">📄</span> RunEvent</h3>
+      <table class="detail">
+        <tr><td><code>event_id</code></td><td>string — UUID 前 16 字符</td></tr>
+        <tr><td><code>run_id</code></td><td>string</td></tr>
+        <tr><td><code>type</code></td><td>RunEventType</td></tr>
+        <tr><td><code>sequence</code></td><td>number — 递增序号</td></tr>
+        <tr><td><code>created_at</code></td><td>string — ISO 8601</td></tr>
+        <tr><td><code>payload</code></td><td>Record&lt;string, unknown&gt;</td></tr>
+      </table>
+      <h4 style="font-size:.85rem;margin:16px 0 8px">RunEventType 枚举</h4>
+      <table class="detail">
+        <tr><td><code>run.started</code></td><td>审查开始</td></tr>
+        <tr><td><code>message.delta</code></td><td>流式消息片段</td></tr>
+        <tr><td><code>tool.call</code></td><td>工具调用</td></tr>
+        <tr><td><code>tool.result</code></td><td>工具返回</td></tr>
+        <tr><td><code>subagent.started</code></td><td>子 Agent 启动</td></tr>
+        <tr><td><code>subagent.completed</code></td><td>子 Agent 完成</td></tr>
+        <tr><td><code>run.completed</code></td><td>审查完成（终态）</td></tr>
+        <tr><td><code>run.failed</code></td><td>审查失败（终态）</td></tr>
+        <tr><td><code>run.cancelled</code></td><td>审查取消（终态）</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <!-- ExtractFindings -->
+  <div class="card fade-in">
+    <h3><span class="icon" style="background:rgba(240,140,0,.1);color:var(--yellow)">🔍</span> extractFindings() 三级提取策略</h3>
+    <div class="step-list">
+      <div class="step-item"><div class="step-body"><h4>Coordinator 输出优先</h4><p>获取 <code>result.agentResults.get('coordinator')?.output</code>，运行 <code>parseFindingsFromText()</code>。先提取 <code>```json...```</code> 围栏块，再尝试匹配顶层 <code>[...]</code> JSON 数组。</p></div></div>
+      <div class="step-item"><div class="step-body"><h4>子 Agent 聚合</h4><p>遍历所有非 coordinator 的 agent 结果，各自解析。按 <code>${file}:${line ?? 0}:${title}</code> 去重（Set&lt;string&gt;）。</p></div></div>
+      <div class="step-item"><div class="step-body"><h4>Markdown 回退</h4><p>拼接所有输出，运行 <code>parseFindingsFromMarkdown()</code>。按 <code>###</code> 标题或 <code>---</code> 分割，用正则提取 <code>**File:**</code>, <code>**Title:**</code>, <code>**Severity:**</code> 等字段。同样去重。</p></div></div>
+    </div>
+  </div>
+
+  <!-- coerceFinding -->
+  <div class="card fade-in">
+    <h3><span class="icon" style="background:rgba(16,152,173,.1);color:var(--cyan)">✅</span> coerceFinding() 验证逻辑</h3>
+    <ul>
+      <li><code>value.file</code> 必须为 string → 否则返回 null</li>
+      <li><code>value.title</code> 和 <code>value.description</code> 必须为 string → 否则返回 null</li>
+      <li><code>value.severity</code> 通过 <code>normalizeSeverity()</code> 校验，不在枚举中则默认 <code>'info'</code></li>
+      <li><code>value.category</code> 通过 <code>normalizeCategory()</code> 校验，不在枚举中则默认 <code>'code-quality'</code></li>
+      <li><code>value.evidence</code> 中每个 item 的 <code>line</code> 非 number 则设为 undefined</li>
+    </ul>
+  </div>
+</div>
+</section>
+
+<!-- ═══════════════════════════════════════════ -->
+<!-- 8. GITHUB INTEGRATION                      -->
+<!-- ═══════════════════════════════════════════ -->
+<section style="background:var(--surface)">
+<div class="container">
+  <h2 class="section-title fade-in"><span>08</span> GitHub 集成细节</h2>
+  <p class="section-sub fade-in">fetchPRContext() 的并行 API 调用与 Diff 解析</p>
+
+  <div class="card fade-in">
+    <h3><span class="icon" style="background:rgba(12,166,120,.1);color:var(--accent2)">🐙</span> fetchPRContext() 实现</h3>
+    <div class="step-list">
+      <div class="step-item"><div class="step-body"><h4>三路并行 API 调用</h4><p><code>Promise.all</code> 同时请求：<code>pulls.get</code>（元数据）、<code>pulls.listFiles</code>（文件 diff，per_page: 100）、<code>pulls.listCommits</code>（提交记录，per_page: 100）</p></div></div>
+      <div class="step-item"><div class="step-body"><h4>Diff 解析 — parsePatch()</h4><p>逐行解析 Unified Diff 格式：<code>@@</code> → 新 Hunk，<code>+</code> → added，<code>-</code> → removed，空格 → unchanged，<code>\</code> → 跳过</p></div></div>
+      <div class="step-item"><div class="step-body"><h4>组装 PRContext</h4><p>context_id 格式：<code>owner/repo/pull/number</code>。description 默认 ''，author 默认 'unknown'</p></div></div>
+    </div>
+  </div>
+</div>
+</section>
+
+<!-- ═══════════════════════════════════════════ -->
+<!-- 9. TEAM SETUP                              -->
+<!-- ═══════════════════════════════════════════ -->
+<section>
+<div class="container">
+  <h2 class="section-title fade-in"><span>09</span> OMA 团队组装</h2>
+  <p class="section-sub fade-in">createReviewTeam() 的完整初始化流程</p>
+
+  <div class="card fade-in">
+    <h3><span class="icon" style="background:rgba(112,72,232,.1);color:var(--purple)">🏗</span> createReviewTeam() 5 步初始化</h3>
+    <div class="step-list">
+      <div class="step-item"><div class="step-body"><h4>创建 LLM 适配器</h4><p>Mock 模式（<code>PR_COPILOT_MOCK_LLM=true</code>）→ <code>createMockAdapter()</code>。正常模式 → <code>createAdapter('openai', apiKey, baseURL)</code></p></div></div>
+      <div class="step-item"><div class="step-body"><h4>构建工具工厂</h4><p><code>(agentName) => ToolDefinition[]</code>。从 reviewPackage 读取该 Agent 的 scope，创建预算（maxFiles/maxSearches/maxTokens），调用 <code>createAllRepoTools()</code></p></div></div>
+      <div class="step-item"><div class="step-body"><h4>创建编排器</h4><p><code>new OpenMultiAgent({defaultProvider, defaultModel, defaultApiKey, defaultBaseURL, maxConcurrency})</code>。Mock 模式下 default 字段设为 undefined</p></div></div>
+      <div class="step-item"><div class="step-body"><h4>修补 Synthesis Prompt</h4><p>Monkey-patch <code>orchestrator.buildSynthesisPrompt</code>，追加 JSON 输出格式要求和中文强制指令</p></div></div>
+      <div class="step-item"><div class="step-body"><h4>创建团队</h4><p><code>orchestrator.createTeam('pr-review', {name, agents, sharedMemory: false, maxConcurrency})</code></p></div></div>
+    </div>
+  </div>
+</div>
+</section>
+
+<!-- Footer -->
+<footer>
+  <div class="container">
+    <p>PR Copilot · 实现细节深度解析 · <a href="architecture.html">← 返回全景架构</a></p>
+  </div>
+</footer>
+
+<!-- Scroll Animation -->
+<script>
+const obs = new IntersectionObserver(es => {
+  es.forEach(e => { if (e.isIntersecting) { e.target.classList.add('visible'); obs.unobserve(e.target); } });
+}, { threshold: 0.08 });
+document.querySelectorAll('.fade-in').forEach(el => obs.observe(el));
+</script>
+</body>
+</html>

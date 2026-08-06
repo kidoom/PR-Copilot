@@ -1,0 +1,766 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PR Copilot — 全景架构</title>
+<style>
+/* ───────── Reset & Base ───────── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#ffffff;--surface:#f6f8fa;--card:#ffffff;--border:#dce0e6;
+  --text:#1a1f2e;--muted:#5e6b7e;--accent:#4263eb;--accent2:#0ca678;
+  --red:#e03131;--orange:#e8590c;--yellow:#f08c00;--green:#2f9e44;
+  --purple:#7048e8;--cyan:#1098ad;--pink:#d6336c;
+  --radius:12px;--shadow:0 2px 12px rgba(0,0,0,.08);
+}
+html{scroll-behavior:smooth;font-size:16px}
+body{font-family:'Inter','Segoe UI',system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;overflow-x:hidden}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+code{background:rgba(0,0,0,.06);padding:1px 6px;border-radius:4px;font-size:.85em;font-family:'Fira Code',monospace}
+
+/* ───────── Layout ───────── */
+.container{max-width:1200px;margin:0 auto;padding:0 24px}
+section{padding:80px 0}
+.section-title{font-size:2rem;font-weight:700;margin-bottom:8px;background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.section-subtitle{color:var(--muted);font-size:1.05rem;margin-bottom:48px}
+
+/* ───────── Navigation ───────── */
+nav{position:fixed;top:0;left:0;right:0;z-index:100;background:rgba(255,255,255,.92);backdrop-filter:blur(12px);border-bottom:1px solid var(--border);padding:0 24px}
+nav .inner{max-width:1200px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;height:56px}
+nav .logo{font-weight:700;font-size:1.1rem;color:var(--text);display:flex;align-items:center;gap:8px}
+nav .logo svg{width:28px;height:28px}
+nav ul{list-style:none;display:flex;gap:24px}
+nav ul li a{color:var(--muted);font-size:.875rem;font-weight:500;transition:color .2s}
+nav ul li a:hover{color:var(--text);text-decoration:none}
+
+/* ───────── Hero ───────── */
+.hero{padding:140px 0 80px;text-align:center;position:relative;overflow:hidden}
+.hero::before{content:'';position:absolute;top:-200px;left:50%;transform:translateX(-50%);width:800px;height:800px;background:radial-gradient(circle,rgba(66,99,235,.06) 0%,transparent 70%);pointer-events:none}
+.hero h1{font-size:3.2rem;font-weight:800;line-height:1.2;margin-bottom:16px;background:linear-gradient(135deg,#1a1f2e 0%,var(--accent) 50%,var(--accent2) 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.hero p{font-size:1.2rem;color:var(--muted);max-width:640px;margin:0 auto 32px}
+.hero-badges{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+.badge{display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:20px;font-size:.8rem;font-weight:600;border:1px solid var(--border);background:var(--surface)}
+.badge .dot{width:8px;height:8px;border-radius:50%}
+
+/* ───────── Stats Row ───────── */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:20px;margin-bottom:80px}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:24px;text-align:center;transition:transform .2s,box-shadow .2s}
+.stat-card:hover{transform:translateY(-2px);box-shadow:var(--shadow)}
+.stat-num{font-size:2.2rem;font-weight:800;background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.stat-label{color:var(--muted);font-size:.85rem;margin-top:4px}
+
+/* ───────── Layer Diagram ───────── */
+.layer-stack{display:flex;flex-direction:column;gap:3px;max-width:960px;margin:0 auto}
+.layer{border-radius:var(--radius);padding:20px 28px;display:flex;align-items:center;gap:20px;transition:transform .2s,box-shadow .2s;cursor:default;position:relative;overflow:hidden}
+.layer:hover{transform:scale(1.01);box-shadow:var(--shadow)}
+.layer-icon{width:48px;height:48px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:1.4rem;flex-shrink:0}
+.layer-content{flex:1}
+.layer-title{font-weight:700;font-size:1.05rem;margin-bottom:2px}
+.layer-desc{font-size:.85rem;color:var(--muted)}
+.layer-files{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.layer-files span{font-size:.7rem;padding:2px 8px;border-radius:6px;background:rgba(0,0,0,.05);color:var(--muted);font-family:'Fira Code',monospace}
+.layer-arrow{text-align:center;color:var(--muted);font-size:1.2rem;padding:4px 0;letter-spacing:4px}
+
+/* Layer colors */
+.l-frontend{background:linear-gradient(135deg,rgba(66,99,235,.08),rgba(66,99,235,.02));border:1px solid rgba(66,99,235,.15)}
+.l-frontend .layer-icon{background:rgba(66,99,235,.12);color:var(--accent)}
+.l-api{background:linear-gradient(135deg,rgba(12,166,120,.08),rgba(12,166,120,.02));border:1px solid rgba(12,166,120,.15)}
+.l-api .layer-icon{background:rgba(12,166,120,.12);color:var(--accent2)}
+.l-static{background:linear-gradient(135deg,rgba(240,140,0,.08),rgba(240,140,0,.02));border:1px solid rgba(240,140,0,.15)}
+.l-static .layer-icon{background:rgba(240,140,0,.12);color:var(--yellow)}
+.l-agent{background:linear-gradient(135deg,rgba(112,72,232,.08),rgba(112,72,232,.02));border:1px solid rgba(112,72,232,.15)}
+.l-agent .layer-icon{background:rgba(112,72,232,.12);color:var(--purple)}
+.l-tools{background:linear-gradient(135deg,rgba(224,49,49,.08),rgba(224,49,49,.02));border:1px solid rgba(224,49,49,.15)}
+.l-tools .layer-icon{background:rgba(224,49,49,.12);color:var(--red)}
+.l-stream{background:linear-gradient(135deg,rgba(214,51,108,.08),rgba(214,51,108,.02));border:1px solid rgba(214,51,108,.15)}
+.l-stream .layer-icon{background:rgba(214,51,108,.12);color:var(--pink)}
+.l-store{background:linear-gradient(135deg,rgba(16,152,173,.08),rgba(16,152,173,.02));border:1px solid rgba(16,152,173,.15)}
+.l-store .layer-icon{background:rgba(16,152,173,.12);color:var(--cyan)}
+
+/* ───────── Flow Diagram ───────── */
+.flow-container{position:relative;max-width:1000px;margin:0 auto}
+.flow-step{display:flex;align-items:flex-start;gap:24px;margin-bottom:12px;position:relative}
+.flow-num{width:44px;height:44px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:1rem;flex-shrink:0;position:relative;z-index:2}
+.flow-line{position:absolute;left:21px;top:44px;bottom:-12px;width:2px;background:var(--border);z-index:1}
+.flow-card{flex:1;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px 24px;transition:transform .2s,box-shadow .2s}
+.flow-card:hover{transform:translateX(4px);box-shadow:var(--shadow)}
+.flow-card h4{font-weight:700;font-size:1rem;margin-bottom:6px}
+.flow-card p{font-size:.85rem;color:var(--muted);line-height:1.5}
+.flow-card .tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+.flow-card .tag{font-size:.7rem;padding:2px 8px;border-radius:6px;font-weight:600}
+
+/* Step colors */
+.s1 .flow-num{background:rgba(66,99,235,.1);color:var(--accent)}
+.s1 .flow-card{border-left:3px solid var(--accent)}
+.s2 .flow-num{background:rgba(12,166,120,.1);color:var(--accent2)}
+.s2 .flow-card{border-left:3px solid var(--accent2)}
+.s3 .flow-num{background:rgba(240,140,0,.1);color:var(--yellow)}
+.s3 .flow-card{border-left:3px solid var(--yellow)}
+.s4 .flow-num{background:rgba(112,72,232,.1);color:var(--purple)}
+.s4 .flow-card{border-left:3px solid var(--purple)}
+.s5 .flow-num{background:rgba(224,49,49,.1);color:var(--red)}
+.s5 .flow-card{border-left:3px solid var(--red)}
+.s6 .flow-num{background:rgba(214,51,108,.1);color:var(--pink)}
+.s6 .flow-card{border-left:3px solid var(--pink)}
+
+.tag-blue{background:rgba(66,99,235,.1);color:var(--accent)}
+.tag-green{background:rgba(12,166,120,.1);color:var(--accent2)}
+.tag-yellow{background:rgba(240,140,0,.1);color:#c07800}
+.tag-purple{background:rgba(112,72,232,.1);color:var(--purple)}
+.tag-red{background:rgba(224,49,49,.1);color:var(--red)}
+.tag-pink{background:rgba(214,51,108,.1);color:var(--pink)}
+
+/* ───────── Agent Grid ───────── */
+.agent-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:20px;max-width:960px;margin:0 auto}
+.agent-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:24px;transition:transform .2s,box-shadow .2s}
+.agent-card:hover{transform:translateY(-3px);box-shadow:var(--shadow)}
+.agent-card .agent-header{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+.agent-card .agent-icon{width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:1.2rem}
+.agent-card h4{font-weight:700;font-size:1rem}
+.agent-card .agent-scope{font-size:.75rem;color:var(--muted);font-family:'Fira Code',monospace}
+.agent-card ul{list-style:none;padding:0}
+.agent-card ul li{font-size:.82rem;color:var(--muted);padding:3px 0;padding-left:16px;position:relative}
+.agent-card ul li::before{content:'›';position:absolute;left:0;color:var(--accent);font-weight:700}
+.agent-meta{display:flex;gap:12px;margin-top:14px;padding-top:14px;border-top:1px solid var(--border)}
+.agent-meta span{font-size:.72rem;color:var(--muted);display:flex;align-items:center;gap:4px}
+
+.a-sec{border-top:3px solid var(--red)}
+.a-sec .agent-icon{background:rgba(224,49,49,.1);color:var(--red)}
+.a-test{border-top:3px solid var(--green)}
+.a-test .agent-icon{background:rgba(47,158,68,.1);color:var(--green)}
+.a-cfg{border-top:3px solid var(--orange)}
+.a-cfg .agent-icon{background:rgba(232,89,12,.1);color:var(--orange)}
+.a-quality{border-top:3px solid var(--cyan)}
+.a-quality .agent-icon{background:rgba(16,152,173,.1);color:var(--cyan)}
+
+/* ───────── Tools Grid ───────── */
+.tools-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;max-width:960px;margin:0 auto}
+.tool-item{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px;transition:transform .15s}
+.tool-item:hover{transform:translateY(-2px);box-shadow:var(--shadow)}
+.tool-item .tool-name{font-family:'Fira Code',monospace;font-size:.82rem;font-weight:600;color:var(--accent);margin-bottom:4px}
+.tool-item .tool-desc{font-size:.78rem;color:var(--muted);line-height:1.4}
+.tool-item .tool-badges{display:flex;gap:4px;margin-top:8px;flex-wrap:wrap}
+.tool-item .tool-badges span{font-size:.65rem;padding:1px 6px;border-radius:4px;background:rgba(0,0,0,.05);color:var(--muted)}
+
+/* ───────── Compression Pipeline ───────── */
+.compress-pipeline{display:flex;align-items:center;gap:8px;max-width:960px;margin:0 auto;flex-wrap:wrap;justify-content:center}
+.compress-step{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;text-align:center;flex:1;min-width:180px;transition:transform .2s}
+.compress-step:hover{transform:translateY(-2px);box-shadow:var(--shadow)}
+.compress-step .cs-icon{font-size:1.6rem;margin-bottom:8px}
+.compress-step h4{font-size:.9rem;font-weight:700;margin-bottom:4px}
+.compress-step p{font-size:.75rem;color:var(--muted)}
+.compress-arrow{font-size:1.4rem;color:var(--muted);flex-shrink:0}
+
+/* ───────── Pattern Cards ───────── */
+.pattern-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:20px;max-width:960px;margin:0 auto}
+.pattern-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:24px;transition:transform .2s}
+.pattern-card:hover{transform:translateY(-2px);box-shadow:var(--shadow)}
+.pattern-card .p-icon{font-size:1.6rem;margin-bottom:12px}
+.pattern-card h4{font-weight:700;font-size:1rem;margin-bottom:8px}
+.pattern-card p{font-size:.85rem;color:var(--muted);line-height:1.5}
+
+/* ───────── API Table ───────── */
+.api-table{width:100%;border-collapse:collapse;max-width:960px;margin:0 auto;font-size:.85rem}
+.api-table th{text-align:left;padding:12px 16px;background:var(--surface);color:var(--muted);font-weight:600;font-size:.75rem;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid var(--border)}
+.api-table td{padding:12px 16px;border-bottom:1px solid var(--border);vertical-align:top}
+.api-table tr:hover td{background:rgba(66,99,235,.04)}
+.method{display:inline-block;padding:2px 8px;border-radius:4px;font-size:.72rem;font-weight:700;font-family:'Fira Code',monospace}
+.m-get{background:rgba(47,158,68,.1);color:var(--green)}
+.m-post{background:rgba(66,99,235,.1);color:var(--accent)}
+.m-sse{background:rgba(232,89,12,.1);color:var(--orange)}
+.path{font-family:'Fira Code',monospace;font-size:.82rem;color:#0c8599}
+
+/* ───────── Env Table ───────── */
+.env-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;max-width:960px;margin:0 auto}
+.env-item{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px;display:flex;gap:12px;align-items:flex-start}
+.env-item .env-key{font-family:'Fira Code',monospace;font-size:.78rem;font-weight:600;color:var(--accent);white-space:nowrap;min-width:200px}
+.env-item .env-desc{font-size:.8rem;color:var(--muted)}
+
+/* ───────── Footer ───────── */
+footer{padding:40px 0;text-align:center;border-top:1px solid var(--border);color:var(--muted);font-size:.85rem}
+
+/* ───────── Responsive ───────── */
+@media(max-width:768px){
+  .hero h1{font-size:2rem}
+  .stats{grid-template-columns:repeat(2,1fr)}
+  .agent-grid,.pattern-grid{grid-template-columns:1fr}
+  .tools-grid{grid-template-columns:repeat(2,1fr)}
+  .env-grid{grid-template-columns:1fr}
+  nav ul{gap:12px}
+  nav ul li a{font-size:.75rem}
+  .compress-pipeline{flex-direction:column}
+  .compress-arrow{transform:rotate(90deg)}
+}
+@media(max-width:480px){
+  .tools-grid{grid-template-columns:1fr}
+  .stats{grid-template-columns:1fr}
+}
+
+/* ───────── Scroll Animation ───────── */
+.fade-in{opacity:0;transform:translateY(20px);transition:opacity .6s ease,transform .6s ease}
+.fade-in.visible{opacity:1;transform:translateY(0)}
+</style>
+</head>
+<body>
+
+<!-- ═══ Navigation ═══ -->
+<nav>
+  <div class="inner">
+    <div class="logo">
+      <svg viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="14" stroke="var(--accent)" stroke-width="2"/><path d="M10 16l4 4 8-8" stroke="var(--accent2)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      PR Copilot
+    </div>
+    <ul>
+      <li><a href="#overview">概览</a></li>
+      <li><a href="#layers">分层架构</a></li>
+      <li><a href="#flow">数据流</a></li>
+      <li><a href="#agents">Agent 团队</a></li>
+      <li><a href="#tools">工具集</a></li>
+      <li><a href="#api">API</a></li>
+      <li><a href="#patterns">设计模式</a></li>
+    </ul>
+  </div>
+</nav>
+
+<!-- ═══ Hero ═══ -->
+<header class="hero" id="overview">
+  <div class="container">
+    <h1>PR Copilot<br>全景架构</h1>
+    <p>AI 驱动的 Pull Request 代码审查助手 — 从 GitHub PR URL 到结构化审查报告，全链路自动化</p>
+    <div class="hero-badges">
+      <span class="badge"><span class="dot" style="background:var(--accent)"></span>TypeScript</span>
+      <span class="badge"><span class="dot" style="background:var(--accent2)"></span>React 19</span>
+      <span class="badge"><span class="dot" style="background:var(--purple)"></span>OMA 多智能体</span>
+      <span class="badge"><span class="dot" style="background:var(--yellow)"></span>Express</span>
+      <span class="badge"><span class="dot" style="background:var(--pink)"></span>SSE 实时流</span>
+    </div>
+  </div>
+</header>
+
+<!-- ═══ Stats ═══ -->
+<section class="container">
+  <div class="stats fade-in">
+    <div class="stat-card"><div class="stat-num">4</div><div class="stat-label">专业审查 Agent</div></div>
+    <div class="stat-card"><div class="stat-num">9</div><div class="stat-label">仓库工具</div></div>
+    <div class="stat-card"><div class="stat-num">10+</div><div class="stat-label">证据规则</div></div>
+    <div class="stat-card"><div class="stat-num">4 层</div><div class="stat-label">上下文压缩</div></div>
+  </div>
+</section>
+
+<!-- ═══ Layered Architecture ═══ -->
+<section id="layers">
+  <div class="container">
+    <h2 class="section-title fade-in">分层架构</h2>
+    <p class="section-subtitle fade-in">从用户界面到持久化存储，七层清晰分工</p>
+
+    <div class="layer-stack fade-in">
+      <!-- L1: Frontend -->
+      <div class="layer l-frontend">
+        <div class="layer-icon">🖥</div>
+        <div class="layer-content">
+          <div class="layer-title">前端展示层 — React + Vite + Tailwind</div>
+          <div class="layer-desc">用户输入 PR URL，展示分析结果、实时 Agent 流、审查发现卡片</div>
+          <div class="layer-files">
+            <span>App.tsx</span><span>ReviewPanel.tsx</span><span>TerminalStream.tsx</span><span>FindingCard.tsx</span><span>api.ts</span><span>types.ts</span>
+          </div>
+        </div>
+      </div>
+      <div class="layer-arrow">▼ &nbsp; HTTP / SSE &nbsp; ▼</div>
+
+      <!-- L2: API Routes -->
+      <div class="layer l-api">
+        <div class="layer-icon">🔌</div>
+        <div class="layer-content">
+          <div class="layer-title">API 路由层 — Express Routes</div>
+          <div class="layer-desc">REST 端点 + SSE 事件流 + WebSocket，管理 PR 上下文与审查生命周期</div>
+          <div class="layer-files">
+            <span>routes/pr.ts</span><span>routes/review.ts</span><span>routes/health.ts</span><span>ws/events.ts</span>
+          </div>
+        </div>
+      </div>
+      <div class="layer-arrow">▼ &nbsp; 调用 &nbsp; ▼</div>
+
+      <!-- L3: GitHub -->
+      <div class="layer l-api">
+        <div class="layer-icon">🐙</div>
+        <div class="layer-content">
+          <div class="layer-title">GitHub 集成层 — Octokit</div>
+          <div class="layer-desc">并行拉取 PR 元数据、文件 Diff、提交记录，解析统一 Diff 为 Hunk 结构</div>
+          <div class="layer-files">
+            <span>github/client.ts</span><span>github/pr.ts</span><span>github/checks.ts</span>
+          </div>
+        </div>
+      </div>
+      <div class="layer-arrow">▼ &nbsp; 数据输入 &nbsp; ▼</div>
+
+      <!-- L4: Static Review -->
+      <div class="layer l-static">
+        <div class="layer-icon">⚙️</div>
+        <div class="layer-content">
+          <div class="layer-title">静态审查层 — 确定性分析管线</div>
+          <div class="layer-desc">文件分类 → 优先级评分 → 证据规则扫描 → 上下文任务规划 → Token 感知打包</div>
+          <div class="layer-files">
+            <span>review/intake.ts</span><span>review/priority.ts</span><span>review/evidence.ts</span><span>review/context-plan.ts</span><span>review/package.ts</span>
+          </div>
+        </div>
+      </div>
+      <div class="layer-arrow">▼ &nbsp; 审查包 + Agent Scope &nbsp; ▼</div>
+
+      <!-- L5: Agent Pipeline -->
+      <div class="layer l-agent">
+        <div class="layer-icon">🤖</div>
+        <div class="layer-content">
+          <div class="layer-title">Agent 管线层 — OMA 多智能体编排</div>
+          <div class="layer-desc">Coordinator 任务分解 → 4 个专业 Agent 并行审查 → 综合发现输出</div>
+          <div class="layer-files">
+            <span>agent/run.ts</span><span>agent/team.ts</span><span>agent/agents.ts</span><span>agent/prompts.ts</span><span>agent/mock-adapter.ts</span>
+          </div>
+        </div>
+      </div>
+      <div class="layer-arrow">▼ &nbsp; 工具调用 &nbsp; ▼</div>
+
+      <!-- L6: Tools + Compression -->
+      <div class="layer l-tools">
+        <div class="layer-icon">🔧</div>
+        <div class="layer-content">
+          <div class="layer-title">工具与压缩层 — 作用域 + 预算 + 压缩</div>
+          <div class="layer-desc">9 个仓库工具（路径安全 + 敏感文件过滤 + 作用域强制 + Token 预算），4 层上下文压缩管线</div>
+          <div class="layer-files">
+            <span>tools/*.ts</span><span>compression/index.ts</span><span>compression/compact.ts</span><span>compression/micro-compact.ts</span>
+          </div>
+        </div>
+      </div>
+      <div class="layer-arrow">▼ &nbsp; 事件流 &nbsp; ▼</div>
+
+      <!-- L7: Streaming + Store -->
+      <div class="layer l-stream">
+        <div class="layer-icon">📡</div>
+        <div class="layer-content">
+          <div class="layer-title">事件流与持久化层</div>
+          <div class="layer-desc">SSE + WebSocket 双通道实时推送，JSON + JSONL 持久化，支持断线重连与事件回放</div>
+          <div class="layer-files">
+            <span>store/session.ts</span><span>ws/events.ts</span><span>types/events.ts</span><span>types/event-mapper.ts</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ Data Flow ═══ -->
+<section id="flow" style="background:var(--surface)">
+  <div class="container">
+    <h2 class="section-title fade-in">端到端数据流</h2>
+    <p class="section-subtitle fade-in">从用户输入 PR URL 到结构化审查报告的完整旅程</p>
+
+    <div class="flow-container fade-in">
+      <div class="flow-step s1">
+        <div class="flow-num">1</div>
+        <div class="flow-line"></div>
+        <div class="flow-card">
+          <h4>🔍 PR 分析</h4>
+          <p>用户输入 PR URL → <code>POST /api/pr/context</code> → 解析 URL → 并行调用 GitHub API（元数据 + 文件 + 提交）→ 解析 Unified Diff 为 Hunk 结构 → 持久化 PRContext</p>
+          <div class="tags">
+            <span class="tag tag-blue">App.tsx</span>
+            <span class="tag tag-green">routes/pr.ts</span>
+            <span class="tag tag-green">github/pr.ts</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="flow-step s2">
+        <div class="flow-num">2</div>
+        <div class="flow-line"></div>
+        <div class="flow-card">
+          <h4>📊 静态审查</h4>
+          <p>文件分类（source/test/config/ci/doc）→ 优先级评分（0-100，含风险模式加权）→ 证据规则扫描（密钥泄露、SQL 注入、eval 等 10+ 规则）→ 上下文任务规划 → Token 感知打包为 4 个 Agent Scope</p>
+          <div class="tags">
+            <span class="tag tag-yellow">intake.ts</span>
+            <span class="tag tag-yellow">priority.ts</span>
+            <span class="tag tag-yellow">evidence.ts</span>
+            <span class="tag tag-yellow">package.ts</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="flow-step s3">
+        <div class="flow-num">3</div>
+        <div class="flow-line"></div>
+        <div class="flow-card">
+          <h4>🚀 审查启动</h4>
+          <p>用户点击"启动 AI 审查" → <code>POST /api/review/runs</code> → 创建 ReviewRun 记录 → queueMicrotask 异步触发 runReview() → 立即返回 run_id → 前端订阅 SSE</p>
+          <div class="tags">
+            <span class="tag tag-blue">ReviewPanel.tsx</span>
+            <span class="tag tag-green">routes/review.ts</span>
+            <span class="tag tag-purple">agent/run.ts</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="flow-step s4">
+        <div class="flow-num">4</div>
+        <div class="flow-line"></div>
+        <div class="flow-card">
+          <h4>🤖 Agent 编排</h4>
+          <p>构建 OMA 团队（1 Coordinator + 4 专业 Agent）→ Coordinator 分解目标为子任务 → 并行分发给 security / test / config / quality Agent → Agent 使用受限工具审查代码 → 压缩管线管理上下文窗口</p>
+          <div class="tags">
+            <span class="tag tag-purple">team.ts</span>
+            <span class="tag tag-purple">agents.ts</span>
+            <span class="tag tag-purple">prompts.ts</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="flow-step s5">
+        <div class="flow-num">5</div>
+        <div class="flow-line"></div>
+        <div class="flow-card">
+          <h4>📡 实时流推送</h4>
+          <p>OMA 事件 → event-mapper 转换 → reviewState.pushEvent() → 内存队列 + JSON 存储 + SSE 订阅者 → 前端 TerminalStream 实时渲染：阶段指示器、Agent 卡片、工具调用日志、进度条</p>
+          <div class="tags">
+            <span class="tag tag-pink">event-mapper.ts</span>
+            <span class="tag tag-pink">TerminalStream.tsx</span>
+            <span class="tag tag-pink">ws/events.ts</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="flow-step s6">
+        <div class="flow-num">6</div>
+        <div class="flow-card">
+          <h4>✅ 综合输出</h4>
+          <p>Coordinator 综合子 Agent 输出 → JSON 结构化发现 → extractFindings() 解析 → run.completed 事件 → 前端 FindingCard 渲染（严重性分级、置信度、证据列表、修复建议）→ 持久化到 JSON 存储</p>
+          <div class="tags">
+            <span class="tag tag-purple">agent/run.ts</span>
+            <span class="tag tag-blue">FindingCard.tsx</span>
+            <span class="tag tag-green">store/session.ts</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ Agent Team ═══ -->
+<section id="agents">
+  <div class="container">
+    <h2 class="section-title fade-in">Agent 团队</h2>
+    <p class="section-subtitle fade-in">4 个专业化 Agent，各司其职，协同审查</p>
+
+    <div class="agent-grid fade-in">
+      <div class="agent-card a-sec">
+        <div class="agent-header">
+          <div class="agent-icon">🛡</div>
+          <div>
+            <h4>security-reviewer</h4>
+            <div class="agent-scope">14 文件 · 100K tokens</div>
+          </div>
+        </div>
+        <ul>
+          <li>认证绕过与授权缺陷</li>
+          <li>注入攻击（SQL / XSS / 命令注入）</li>
+          <li>硬编码密钥与敏感数据泄露</li>
+          <li>信任边界与加密实现</li>
+        </ul>
+        <div class="agent-meta">
+          <span>📂 auth / inject / secrets 文件</span>
+          <span>🔧 read_file_patch, search_diff, read_repo_file</span>
+        </div>
+      </div>
+
+      <div class="agent-card a-test">
+        <div class="agent-header">
+          <div class="agent-icon">🧪</div>
+          <div>
+            <h4>test-context-analyzer</h4>
+            <div class="agent-scope">22 文件 · 140K tokens</div>
+          </div>
+        </div>
+        <ul>
+          <li>缺失测试覆盖检测</li>
+          <li>弱断言与测试质量评估</li>
+          <li>回归风险分析</li>
+          <li>源文件与测试文件关联</li>
+        </ul>
+        <div class="agent-meta">
+          <span>📂 source + test 文件</span>
+          <span>🔧 search_tests_for, read_file_patch</span>
+        </div>
+      </div>
+
+      <div class="agent-card a-cfg">
+        <div class="agent-header">
+          <div class="agent-icon">⚙️</div>
+          <div>
+            <h4>config-reviewer</h4>
+            <div class="agent-scope">12 文件 · 80K tokens</div>
+          </div>
+        </div>
+        <ul>
+          <li>依赖变更与版本风险</li>
+          <li>环境变量与配置安全</li>
+          <li>CI/CD 流水线配置</li>
+          <li>构建配置与部署风险</li>
+        </ul>
+        <div class="agent-meta">
+          <span>📂 config / ci / build 文件</span>
+          <span>🔧 read_repo_manifest, read_check_summary</span>
+        </div>
+      </div>
+
+      <div class="agent-card a-quality">
+        <div class="agent-header">
+          <div class="agent-icon">💎</div>
+          <div>
+            <h4>code-quality-reviewer</h4>
+            <div class="agent-scope">18 文件 · 120K tokens</div>
+          </div>
+        </div>
+        <ul>
+          <li>正确性 Bug 与逻辑缺陷</li>
+          <li>错误处理与异常边界</li>
+          <li>API 契约与资源泄漏</li>
+          <li>复杂度与类型安全</li>
+        </ul>
+        <div class="agent-meta">
+          <span>📂 所有 source 文件</span>
+          <span>🔧 search_repo, read_repo_file, todo_write</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ Tools ═══ -->
+<section id="tools" style="background:var(--surface)">
+  <div class="container">
+    <h2 class="section-title fade-in">仓库工具集</h2>
+    <p class="section-subtitle fade-in">9 个 OMA 工具，每个都内置作用域强制、路径安全和 Token 预算</p>
+
+    <div class="tools-grid fade-in">
+      <div class="tool-item">
+        <div class="tool-name">read_file_patch</div>
+        <div class="tool-desc">读取 PR Diff 中指定文件的 Hunk 数据</div>
+        <div class="tool-badges"><span>作用域</span><span>路径安全</span></div>
+      </div>
+      <div class="tool-item">
+        <div class="tool-name">search_diff</div>
+        <div class="tool-desc">在所有 PR Diff 行中执行大小写不敏感搜索</div>
+        <div class="tool-badges"><span>作用域过滤</span></div>
+      </div>
+      <div class="tool-item">
+        <div class="tool-name">read_repo_file</div>
+        <div class="tool-desc">读取仓库文件，50 行/次上限</div>
+        <div class="tool-badges"><span>路径穿越防护</span><span>敏感文件拦截</span><span>Token 预算</span></div>
+      </div>
+      <div class="tool-item">
+        <div class="tool-name">search_repo</div>
+        <div class="tool-desc">遍历目录树搜索关键词匹配</div>
+        <div class="tool-badges"><span>搜索预算</span><span>忽略目录</span></div>
+      </div>
+      <div class="tool-item">
+        <div class="tool-name">search_tests_for</div>
+        <div class="tool-desc">按命名约定查找关联测试文件</div>
+        <div class="tool-badges"><span>.test.</span><span>.spec.</span></div>
+      </div>
+      <div class="tool-item">
+        <div class="tool-name">read_repo_manifest</div>
+        <div class="tool-desc">自动检测并读取项目清单文件</div>
+        <div class="tool-badges"><span>package.json</span><span>pyproject.toml</span></div>
+      </div>
+      <div class="tool-item">
+        <div class="tool-name">read_check_summary</div>
+        <div class="tool-desc">返回缓存的 CI/CD 检查结果</div>
+        <div class="tool-badges"><span>Checks API</span></div>
+      </div>
+      <div class="tool-item">
+        <div class="tool-name">verify_repo_context</div>
+        <div class="tool-desc">验证仓库存在性、Git 状态和 SHA/分支匹配</div>
+        <div class="tool-badges"><span>完整性校验</span></div>
+      </div>
+      <div class="tool-item">
+        <div class="tool-name">todo_write</div>
+        <div class="tool-desc">Agent 写入结构化进度跟踪项</div>
+        <div class="tool-badges"><span>进度追踪</span></div>
+      </div>
+    </div>
+
+    <!-- Compression Pipeline -->
+    <h3 style="text-align:center;margin:60px 0 32px;font-size:1.3rem;font-weight:700" class="fade-in">上下文压缩管线</h3>
+    <div class="compress-pipeline fade-in">
+      <div class="compress-step">
+        <div class="cs-icon">🔧</div>
+        <h4>Repair</h4>
+        <p>修复孤立的 tool_use / tool_result 配对</p>
+      </div>
+      <div class="compress-arrow">→</div>
+      <div class="compress-step">
+        <div class="cs-icon">📦</div>
+        <h4>Micro-Compact</h4>
+        <p>替换旧的大工具结果为占位符（保留最近 10 条）</p>
+      </div>
+      <div class="compress-arrow">→</div>
+      <div class="compress-step">
+        <div class="cs-icon">🤖</div>
+        <h4>Auto-Compact</h4>
+        <p>LLM 摘要压缩（128K 窗口，8K 缓冲，4K 摘要）</p>
+      </div>
+      <div class="compress-arrow">→</div>
+      <div class="compress-step">
+        <div class="cs-icon">📋</div>
+        <h4>Recent Select</h4>
+        <p>选择最近消息保持对话连贯性</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ API Reference ═══ -->
+<section id="api">
+  <div class="container">
+    <h2 class="section-title fade-in">API 接口</h2>
+    <p class="section-subtitle fade-in">REST + SSE 双协议，支持断线重连与事件回放</p>
+
+    <div class="fade-in" style="overflow-x:auto">
+      <table class="api-table">
+        <thead>
+          <tr><th>方法</th><th>路径</th><th>说明</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><span class="method m-post">POST</span></td><td class="path">/api/pr/context</td><td>提交 PR URL，获取 PR 上下文（元数据 + Diff + 提交）</td></tr>
+          <tr><td><span class="method m-get">GET</span></td><td class="path">/api/pr/context/:id</td><td>获取已存储的 PR 上下文</td></tr>
+          <tr><td><span class="method m-get">GET</span></td><td class="path">/api/pr/context/:id/files/:file/patch</td><td>获取指定文件的解析 Hunk 数据</td></tr>
+          <tr><td><span class="method m-post">POST</span></td><td class="path">/api/review/intake</td><td>文件分类、语言分布、风险信号分析</td></tr>
+          <tr><td><span class="method m-post">POST</span></td><td class="path">/api/review/runs</td><td>创建审查运行，立即返回 run_id</td></tr>
+          <tr><td><span class="method m-get">GET</span></td><td class="path">/api/review/runs/:id</td><td>查询审查运行状态</td></tr>
+          <tr><td><span class="method m-sse">SSE</span></td><td class="path">/api/review/runs/:id/events</td><td>实时事件流，支持 ?after_sequence=N 回放</td></tr>
+          <tr><td><span class="method m-post">POST</span></td><td class="path">/api/review/runs/:id/cancel</td><td>取消正在运行的审查</td></tr>
+          <tr><td><span class="method m-get">GET</span></td><td class="path">/api/pr/context/:id/runs</td><td>列出某 PR 的所有审查运行</td></tr>
+          <tr><td><span class="method m-get">GET</span></td><td class="path">/api/pr/sessions</td><td>列出所有 PR 会话及最新运行</td></tr>
+          <tr><td><span class="method m-get">GET</span></td><td class="path">/api/health</td><td>健康检查</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ Design Patterns ═══ -->
+<section id="patterns" style="background:var(--surface)">
+  <div class="container">
+    <h2 class="section-title fade-in">关键设计模式</h2>
+    <p class="section-subtitle fade-in">保障安全、可控、可观测的核心架构决策</p>
+
+    <div class="pattern-grid fade-in">
+      <div class="pattern-card">
+        <div class="p-icon">🔒</div>
+        <h4>工具级作用域强制</h4>
+        <p>Agent 无法超越分配的文件范围。每次工具调用都通过 <code>isPathAllowedByScope()</code> 检查 allowedFiles 和 searchPathScopes，而非仅依赖 Prompt 约束。</p>
+      </div>
+      <div class="pattern-card">
+        <div class="p-icon">💰</div>
+        <h4>Token 预算系统</h4>
+        <p>每个 Agent 有独立的文件读取次数、搜索次数和 Token 消耗上限。budget.ts 跟踪所有消耗，防止工具滥用导致成本失控。</p>
+      </div>
+      <div class="pattern-card">
+        <div class="p-icon">📡</div>
+        <h4>SSE + 轮询降级</h4>
+        <p>SSE 为主通道，支持 Last-Event-ID 断线重连和 after_sequence 事件回放。SSE 断开时自动降级为 3 秒轮询，保证数据不丢失。</p>
+      </div>
+      <div class="pattern-card">
+        <div class="p-icon">🗜</div>
+        <h4>四层上下文压缩</h4>
+        <p>Repair → Micro-Compact → Auto-Compact(LLM 摘要) → Recent Select。128K 窗口管理，确保长对话中 Agent 上下文不溢出。</p>
+      </div>
+      <div class="pattern-card">
+        <div class="p-icon">🧪</div>
+        <h4>Mock 适配器</h4>
+        <p><code>PR_COPILOT_MOCK_LLM=true</code> 启用确定性测试模式，无需真实 LLM 调用即可验证全流程。返回预设 JSON 发现数据。</p>
+      </div>
+      <div class="pattern-card">
+        <div class="p-icon">🇨🇳</div>
+        <h4>中文输出强制</h4>
+        <p>所有 Agent 输出（发现描述、修复建议）强制使用简体中文。通过 Coordinator Prompt 和 Synthesis Prompt 双重约束。</p>
+      </div>
+      <div class="pattern-card">
+        <div class="p-icon">🛡</div>
+        <h4>路径安全防护</h4>
+        <p><code>resolveSafePath()</code> 防止路径穿越，<code>isSensitiveFile()</code> 拦截密钥/私钥文件，<code>isIgnoredDirectory()</code> 跳过 .git / node_modules。</p>
+      </div>
+      <div class="pattern-card">
+        <div class="p-icon">📊</div>
+        <h4>事件溯源</h4>
+        <p>所有审查事件以 JSONL 追加写入持久化存储。支持按 sequence 回放、浏览器重连恢复、历史审查重现。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ Env Vars ═══ -->
+<section>
+  <div class="container">
+    <h2 class="section-title fade-in">环境变量</h2>
+    <p class="section-subtitle fade-in">核心配置项一览</p>
+
+    <div class="env-grid fade-in">
+      <div class="env-item">
+        <div class="env-key">PORT</div>
+        <div class="env-desc">后端端口，默认 8000</div>
+      </div>
+      <div class="env-item">
+        <div class="env-key">OPENAI_API_KEY</div>
+        <div class="env-desc">LLM API 密钥</div>
+      </div>
+      <div class="env-item">
+        <div class="env-key">OPENAI_BASE_URL</div>
+        <div class="env-desc">OpenAI 兼容 API 端点</div>
+      </div>
+      <div class="env-item">
+        <div class="env-key">OPENAI_MODEL</div>
+        <div class="env-desc">模型名称，默认 gpt-4o</div>
+      </div>
+      <div class="env-item">
+        <div class="env-key">GITHUB_TOKEN</div>
+        <div class="env-desc">GitHub Token 回退认证</div>
+      </div>
+      <div class="env-item">
+        <div class="env-key">GITHUB_APP_ID</div>
+        <div class="env-desc">GitHub App ID</div>
+      </div>
+      <div class="env-item">
+        <div class="env-key">GITHUB_APP_PRIVATE_KEY</div>
+        <div class="env-desc">GitHub App 私钥</div>
+      </div>
+      <div class="env-item">
+        <div class="env-key">PR_COPILOT_STORAGE_DIR</div>
+        <div class="env-desc">JSON 存储根目录，默认 ~/.pr-copilot</div>
+      </div>
+      <div class="env-item">
+        <div class="env-key">PR_COPILOT_MOCK_LLM</div>
+        <div class="env-desc">启用 Mock LLM 适配器（测试用）</div>
+      </div>
+      <div class="env-item">
+        <div class="env-key">PR_COPILOT_REVIEW_MAX_CONCURRENCY</div>
+        <div class="env-desc">审查任务并发数，默认 1</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ Footer ═══ -->
+<footer>
+  <div class="container">
+    <p>PR Copilot Architecture · Built with TypeScript · React · OMA Multi-Agent</p>
+  </div>
+</footer>
+
+<!-- ═══ Scroll Animation ═══ -->
+<script>
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('visible'); observer.unobserve(e.target); } });
+}, { threshold: 0.1 });
+document.querySelectorAll('.fade-in').forEach(el => observer.observe(el));
+</script>
+</body>
+</html>

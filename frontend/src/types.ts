@@ -121,6 +121,7 @@ export interface EvidenceRef {
 
 export interface NormalizedFinding {
   claim: string
+  description?: string
   confidence: number
   severity: "informational" | "info" | "low" | "medium" | "high" | "critical"
   evidence: EvidenceRef[]

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 
 ## Project Overview
 
-PR Copilot is an AI-powered pull request review assistant. It takes a GitHub PR URL, fetches PR metadata and diffs via GitHub API, builds deterministic review context, packages PR evidence into token-aware reviewer scopes, runs an Open Multi-Agent (OMA) review team, and streams findings to a React frontend over WebSocket.
+PR Copilot is an AI-powered pull request review assistant. It takes a GitHub PR URL, fetches PR metadata and diffs via GitHub API, builds deterministic review context, packages PR evidence into token-aware reviewer scopes, runs an Open Multi-Agent (OMA) review team, and streams findings to a React frontend over Server-Sent Events.
 
 ## Commands
 
@@ -35,14 +35,13 @@ cd frontend && npm run lint
 
 The active backend lives in `server/`:
 
-- `server/src/index.ts`: Express app entry point, CORS, REST routes, WebSocket server.
+- `server/src/index.ts`: Express app entry point, CORS, REST routes, and HTTP server.
 - `server/src/config.ts`: environment loading.
 - `server/src/github/`: Octokit integration for PR metadata, file diffs, commits, and Checks API.
 - `server/src/review/`: static review pipeline for file classification, priority scoring, evidence rules, context task planning, and token-aware review packaging.
 - `server/src/agent/`: OMA review team, coordinator prompt, specialized agents, repo tools, context compression, and `runReview()`.
 - `server/src/agent/tools/`: OMA `defineTool()` repo-context tools with path safety, sensitive-file filtering, per-reviewer scope enforcement, and budgets.
 - `server/src/agent/compression/`: CJK-aware token estimation, micro-compact, repair, auto-compact, recent selection, and custom OMA `ContextStrategy`.
-- `server/src/ws/`: WebSocket subscription, event replay, and event-log persistence.
 - `server/src/store/`: JSON session store for PR contexts, review runs, and event logs.
 
 ### Removed Python Backend
@@ -62,7 +61,7 @@ The frontend lives in `frontend/src/`:
 ## API And Streaming
 
 - REST API: `/api/*`, proxied by Vite to `localhost:8000`.
-- WebSocket: `/ws/review-runs/:run_id`, supports `?after_sequence=N` replay.
+- SSE: `/api/review/runs/:run_id/events`, supports `?after_sequence=N` replay and browser reconnects via `Last-Event-ID`.
 - Event format: `{ event_id, run_id, type, sequence, created_at, payload }`.
 - Terminal events: `run.completed`, `run.failed`, `run.cancelled`.
 
@@ -75,7 +74,7 @@ The frontend lives in `frontend/src/`:
 5. Frontend starts a review run with `POST /api/review/runs`.
 6. `runReview()` creates the OMA team and runs the Coordinator DAG.
 7. Specialized agents use scoped read-only repo tools, per-agent budgets, and per-agent compression.
-8. WebSocket events stream progress and terminal findings.
+8. SSE events stream progress and terminal findings.
 9. Review runs and events are persisted for polling and reconnect replay.
 
 ## Environment Variables
