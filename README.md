@@ -1,6 +1,6 @@
 # PR Copilot
 
-PR Copilot is an AI-powered pull request review assistant. It fetches GitHub PR metadata and diffs, builds deterministic review context, packages PR evidence into token-aware reviewer scopes, runs an Open Multi-Agent (OMA) review team, and streams structured findings to a React frontend over WebSocket.
+PR Copilot is an AI-powered pull request review assistant. It fetches GitHub PR metadata and diffs, builds deterministic review context, packages PR evidence into token-aware reviewer scopes, runs an Open Multi-Agent (OMA) review team, and streams structured findings to a React frontend over Server-Sent Events.
 
 ## Stack
 
@@ -8,7 +8,7 @@ PR Copilot is an AI-powered pull request review assistant. It fetches GitHub PR 
 | --- | --- |
 | Backend | TypeScript, Express, Open Multi-Agent, Octokit |
 | Frontend | React, TypeScript, Vite, Tailwind CSS |
-| Streaming | WebSocket events with replay by sequence |
+| Streaming | Server-Sent Events with replay by sequence |
 | Storage | JSON session store under `PR_COPILOT_STORAGE_DIR` |
 | LLM | OpenAI-compatible API via `OPENAI_*` env vars |
 
@@ -20,7 +20,6 @@ PR-Copilot/
 │   ├── src/github/          # GitHub PR metadata, diffs, checks
 │   ├── src/review/          # Static review pipeline
 │   ├── src/agent/           # OMA team, tools, compression, run orchestration
-│   ├── src/ws/              # WebSocket subscriptions and replay
 │   └── src/store/           # JSON persistence
 ├── frontend/                # React review workbench
 ├── docs/                    # Design and project notes
@@ -94,10 +93,10 @@ curl -X POST http://localhost:8000/api/review/runs \
   -d "{\"context_id\":\"CONTEXT_ID\",\"pr_context\":{...}}"
 ```
 
-WebSocket:
+Server-Sent Events:
 
 ```js
-const ws = new WebSocket("ws://localhost:8000/ws/review-runs/RUN_ID")
+const events = new EventSource("http://localhost:8000/api/review/runs/RUN_ID/events")
 ```
 
 Events use:
